@@ -39,6 +39,20 @@ impl From<&Material> for MaterialData {
     }
 }
 
+/// Изменения текстур egui. egui 0.37 паникует, если изменения уничтожены необработанными
+/// (защита от потерянного атласа шрифта). Но бывает, что применить их некуда: GPU так и не
+/// инициализировался, рендер завершается. Обёртка в этом случае явно их отбрасывает.
+#[derive(Debug)]
+pub(crate) struct UiTextures(pub egui::TexturesDelta);
+
+impl Drop for UiTextures {
+    // [Rust] Drop вызывается при любом уничтожении значения — и после применения,
+    // и если команда так и осталась в очереди. Аналог деструктора в C++.
+    fn drop(&mut self) {
+        self.0.clear();
+    }
+}
+
 /// Снимок экрана: RGBA, 8 бит на канал, sRGB.
 #[derive(Debug, Clone)]
 pub struct Screenshot {
@@ -76,7 +90,7 @@ pub(crate) enum RenderCommand {
     RemoveImage(AssetId<Image>),
     RemoveMaterial(AssetId<Material>),
     /// Изменения текстур интерфейса (атлас шрифта) — терять нельзя, поэтому командой.
-    UiTextures(Box<egui::TexturesDelta>),
+    UiTextures(Box<UiTextures>),
     /// Снимок следующего кадра.
     Screenshot {
         reply: ReplySender<Result<Screenshot, String>>,

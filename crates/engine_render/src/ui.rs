@@ -179,7 +179,9 @@ pub(crate) fn ui_end(ui: Res<Ui>, mut frontend: NonSendMut<RenderFrontend>) {
     let _zone = tracing::trace_span!("ui_end").entered();
     let output = ui.ctx.end_pass();
     if !output.textures_delta.set.is_empty() || !output.textures_delta.free.is_empty() {
-        frontend.send(RenderCommand::UiTextures(Box::new(output.textures_delta)));
+        frontend.send(RenderCommand::UiTextures(Box::new(
+            crate::command::UiTextures(output.textures_delta),
+        )));
     }
     let snapshot = frontend.snapshots.write();
     snapshot.ui.pixels_per_point = output.pixels_per_point;

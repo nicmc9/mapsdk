@@ -26,6 +26,11 @@ fn render_scene(model: &str) -> Option<engine_render::Screenshot> {
             // Тест запускается из папки крейта
             ("assets.root", "../../assets"),
             ("assets.strict", "true"),
+            // Для проверки поведения без GPU: GOLDEN_BACKEND=gl на macOS (там GL нет)
+            (
+                "render.backend",
+                &std::env::var("GOLDEN_BACKEND").unwrap_or_else(|_| "auto".to_owned()),
+            ),
         ] {
             cvars.set(name, value, CVarSource::LaunchArguments).unwrap();
         }

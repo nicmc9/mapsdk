@@ -193,7 +193,8 @@ impl Renderer {
             RenderCommand::RemoveMesh(id) => scene.remove_mesh(id),
             RenderCommand::RemoveImage(id) => scene.remove_image(id),
             RenderCommand::RemoveMaterial(id) => scene.remove_material(id),
-            RenderCommand::UiTextures(mut delta) => {
+            RenderCommand::UiTextures(delta) => {
+                let delta = &delta.0;
                 if let Some(ui) = &mut self.ui {
                     for (id, images) in &delta.set {
                         for image in images {
@@ -201,9 +202,8 @@ impl Renderer {
                         }
                     }
                 }
+                // Обёртка UiTextures пометит изменения обработанными при уничтожении
                 self.ui_free.extend(delta.free.iter().copied());
-                // egui проверяет, что изменения текстур не потерялись: помечаем их обработанными
-                delta.clear();
             }
             _ => {}
         }
