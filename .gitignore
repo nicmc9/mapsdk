@@ -1,4 +1,5 @@
 /target
+**/target
 /platforms/android/build
 /platforms/ios/build
 /platforms/web/pkg
