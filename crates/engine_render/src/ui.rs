@@ -40,8 +40,17 @@ impl Ui {
     }
 
     /// Указатель над интерфейсом — камере и игре стоит игнорировать мышь.
+    ///
+    /// Не `egui_wants_pointer_input`: в egui 0.37 он опирается на границы корневого UI,
+    /// которые заполняет только `run_ui`. Мы используем `begin_pass`/`end_pass`, и без этих
+    /// границ egui считает весь экран своим (фоновый слой) — камера переставала реагировать.
     pub fn wants_pointer(&self) -> bool {
-        self.ctx.egui_wants_pointer_input() || self.ctx.is_pointer_over_egui()
+        let over_window = self
+            .ctx
+            .input(|i| i.pointer.interact_pos())
+            .and_then(|position| self.ctx.layer_id_at(position))
+            .is_some_and(|layer| layer.order != egui::Order::Background);
+        self.ctx.egui_is_using_pointer() || over_window
     }
 
     /// Интерфейс ждёт клавиатуру (фокус в текстовом поле).
@@ -199,4 +208,64 @@ pub(crate) fn ui_end(ui: Res<Ui>, mut frontend: NonSendMut<RenderFrontend>) {
     } else {
         Vec::new()
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Без открытых окон указатель не должен считаться «занятым интерфейсом» —
+    /// иначе камера перестаёт реагировать на мышь и тачпад.
+    #[test]
+    fn pointer_is_free_without_windows() {
+        let ui = Ui::default();
+        for frame in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(egui::pos2(400.0, 300.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(5.0, 3.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            };
+            ui.ctx.begin_pass(raw);
+            let mut output = ui.ctx.end_pass();
+            output.textures_delta.clear(); // в тесте текстуры применять некуда
+            assert!(
+                !ui.wants_pointer(),
+                "кадр {frame}: интерфейс захватил указатель без окон"
+            );
+        }
+        // А над окном — захватывает
+        for _ in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(60.0, 60.0))],
+                ..Default::default()
+            };
+            ui.ctx.begin_pass(raw);
+            egui::Window::new("окно")
+                .fixed_pos([20.0, 20.0])
+                .fixed_size([200.0, 200.0])
+                .show(&ui.ctx, |ui| ui.label("текст"));
+            let mut output = ui.ctx.end_pass();
+            output.textures_delta.clear();
+        }
+        assert!(
+            ui.wants_pointer(),
+            "над окном указатель должен принадлежать интерфейсу"
+        );
+    }
 }

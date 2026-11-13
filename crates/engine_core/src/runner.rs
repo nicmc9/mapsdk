@@ -95,6 +95,8 @@ impl PlatformHandler for AppRunner {
     }
 
     fn input(&mut self, event: InputEvent) {
+        // Диагностика: --cvar log.filter=info,engine_core::runner=trace
+        tracing::trace!("Ввод: {event:?}");
         self.app.world_mut().write_message(PlatformInput(event));
     }
 
