@@ -46,16 +46,26 @@ cargo run -p sandbox --features engine/profiling
 Web требует браузер с WebGPU (решение D3: без WebGL2).
 iOS на устройстве требует подписи сертификатом — будет через Xcode-проект позже.
 
+## Ресурсы
+
+Папка `assets/` в корне репозитория. Модели Khronos: `./assets/fetch_khronos.sh`
+(Sponza в git не хранится — только через скрипт). Скрипты сборки сами кладут `assets`
+в APK, в `.app` и рядом со страницей Web.
+
 ## Проверки, как в CI
 
 ```sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy --workspace --all-targets --target aarch64-linux-android -- -D warnings
+cargo ndk -t arm64-v8a clippy --workspace --all-targets -- -D warnings   # нужен компилятор NDK
 cargo clippy --workspace --all-targets --target aarch64-apple-ios -- -D warnings
 cargo clippy --workspace --lib --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
+cargo test -p engine_net -- --ignored   # реальная сеть
 ```
+
+Под Linux локально на Mac не проверить: `ring` (TLS) содержит C-код, нужен компилятор
+для Linux. Эту сборку проверяет CI.
 
 ## Структура репозитория
 

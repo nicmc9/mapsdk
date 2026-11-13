@@ -10,6 +10,7 @@ mod time;
 mod window;
 
 pub mod sync;
+pub mod tasks;
 
 pub use app::App;
 pub use cvar::{

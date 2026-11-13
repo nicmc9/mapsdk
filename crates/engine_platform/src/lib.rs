@@ -5,6 +5,8 @@
 
 // [Rust] `mod` подключает файл как модуль (аналог #include + namespace сразу).
 // Без `pub` модуль виден только внутри крейта.
+#[cfg(target_os = "android")]
+mod android;
 mod app;
 mod args;
 mod config;
@@ -14,6 +16,7 @@ mod launch;
 mod logging;
 mod window;
 
+pub mod paths;
 pub mod profiling;
 
 // [Rust] `pub use` — реэкспорт: пользователь пишет `engine_platform::PlatformConfig`,
@@ -59,9 +62,9 @@ pub fn run<H: PlatformHandler>(
 fn build_event_loop(launch: LaunchContext) -> Result<EventLoop<()>, PlatformError> {
     use winit::platform::android::EventLoopBuilderExtAndroid;
     // На Android цикл событий привязан к Activity, которую передаёт система.
-    Ok(EventLoop::builder()
-        .with_android_app(launch.into_android_app())
-        .build()?)
+    let app = launch.into_android_app();
+    android::set_app(&app);
+    Ok(EventLoop::builder().with_android_app(app).build()?)
 }
 
 #[cfg(not(target_os = "android"))]

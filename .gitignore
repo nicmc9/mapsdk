@@ -2,6 +2,7 @@
 /platforms/android/build
 /platforms/ios/build
 /platforms/web/pkg
+/platforms/web/assets
 .DS_Store
 
 # Настройки IDE у каждого свои

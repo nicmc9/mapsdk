@@ -37,7 +37,9 @@ cd "$ROOT"
 cargo ndk -t "$ABI" -P 26 -o "$OUT/lib" build -p sandbox --lib ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"}
 
 # 2. Манифест → пустой APK, затем добавляем нативные библиотеки
-"$BUILD_TOOLS/aapt2" link -o "$OUT/unaligned.apk" --manifest "$ANDROID_DIR/AndroidManifest.xml" -I "$ANDROID_JAR"
+# -A: папка assets попадает в APK (читается через AAssetManager)
+"$BUILD_TOOLS/aapt2" link -o "$OUT/unaligned.apk" --manifest "$ANDROID_DIR/AndroidManifest.xml" \
+  -I "$ANDROID_JAR" -A "$ROOT/assets"
 (cd "$OUT" && zip -qr unaligned.apk lib)
 
 # 3. Выравнивание и подпись debug-ключом (создаётся при первом запуске)

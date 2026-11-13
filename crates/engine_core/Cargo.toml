@@ -17,3 +17,8 @@ crossbeam-channel = { workspace = true }
 triple_buffer = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+bevy_tasks = { workspace = true }
+
+# Пулы потоков задач — только там, где есть потоки
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy_tasks = { workspace = true, features = ["multi_threaded"] }

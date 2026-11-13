@@ -21,6 +21,8 @@ engine_math = { path = "crates/engine_math" }
 engine_ecs = { path = "crates/engine_ecs" }
 engine_core = { path = "crates/engine_core" }
 engine_render = { path = "crates/engine_render" }
+engine_net = { path = "crates/engine_net" }
+engine_assets = { path = "crates/engine_assets" }
 
 # Сторонние (описание каждого — docs/crates.md)
 winit = "0.30.13"
@@ -45,6 +47,16 @@ tracing-web = "0.1.4"
 tracing-tracy = { version = "0.12.0", default-features = false, features = ["enable", "ondemand"] }
 tracy-client = { version = "0.19.0", default-features = false, features = ["enable", "ondemand"] }
 toml = "1.2.1"
+# Асинхронные задачи: пулы потоков на native, spawn_local в браузере (часть bevy, как bevy_ecs)
+bevy_tasks = { version = "0.20.1", default-features = false, features = ["async_executor"] }
+async-channel = "2.5.0"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Сеть и форматы ресурсов
+ureq = "3.5.2"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+gltf = { version = "1.4.1", default-features = false, features = ["utils", "names", "KHR_texture_transform", "KHR_materials_emissive_strength", "KHR_lights_punctual"] }
+wasm-bindgen-futures = "0.4.80"
+web-sys = "0.3.107"
 js-sys = "0.3"
 console_error_panic_hook = "0.1.7"
 # [Rust] Версия закреплена точно ("="): CLI `wasm-bindgen` должен совпадать с ней до патча,

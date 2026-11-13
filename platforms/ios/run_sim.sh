@@ -19,6 +19,8 @@ cargo build -p sandbox --bin sandbox --target "$TARGET"
 rm -rf "$APP" && mkdir -p "$APP"
 cp "$ROOT/target/$TARGET/debug/sandbox" "$APP/"
 cp "$IOS_DIR/Info.plist" "$APP/"
+# Ресурсы внутри .app (читаются через engine_platform::paths::read_bundled)
+cp -R "$ROOT/assets" "$APP/assets"
 codesign --force --sign - "$APP"
 
 # 3. Запуск в симуляторе

@@ -1,5 +1,6 @@
 //! Тестовое приложение. Здесь же — точки входа для платформ, где их задаёт ОС.
 
+use engine::assets::formats::{Gltf, Image, Mesh};
 use engine::platform::{LaunchContext, PlatformConfig, PlatformError};
 use engine::prelude::*;
 
@@ -14,6 +15,9 @@ pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
         // и из сети появится вместе с VFS (задача A-01).
         .load_config_toml(include_str!("../sandbox.toml"))
         .add_plugin(RenderPlugin)
+        .add_plugin(NetPlugin)
+        .add_plugin(AssetPlugin)
+        .add_plugin(AssetsDemoPlugin)
         .add_plugin(SandboxPlugin)
         .run(config, launch)
 }
@@ -123,6 +127,120 @@ fn report_stats(
 fn log_lifecycle(mut events: MessageReader<AppLifecycle>) {
     for event in events.read() {
         engine::log::info!("Событие приложения: {event:?}");
+    }
+}
+
+/// Демонстрация ресурсов: модели с диска, по сети, вложенный ресурс, ошибка.
+struct AssetsDemoPlugin;
+
+impl Plugin for AssetsDemoPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Stage::Startup, load_models)
+            .add_systems(Stage::Update, report_models);
+    }
+}
+
+#[derive(Resource)]
+struct Models {
+    gltf: Vec<(&'static str, Handle<Gltf>)>,
+    fox_mesh: Handle<Mesh>,
+    missing: Handle<Image>,
+    all_ready_logged: bool,
+}
+
+const MODELS: &[&str] = &[
+    "models/khronos/Box/Box.glb",
+    "models/khronos/BoxTextured/BoxTextured.glb",
+    "models/khronos/DamagedHelmet/DamagedHelmet.glb",
+    "models/khronos/CesiumMan/CesiumMan.glb",
+    "models/khronos/Fox/Fox.glb",
+    // Не в git (лицензии): есть, только если скачаны локально — иначе ошибка «не найден»
+    "models/khronos/Sponza/Sponza.gltf",
+    "models/orc/orc.glb",
+    // По сети: кеш, повторы, дедупликация
+    "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/Duck/glTF-Binary/Duck.glb",
+];
+
+fn load_models(server: Res<AssetServer>, mut commands: Commands) {
+    let gltf = MODELS
+        .iter()
+        .map(|path| (*path, server.load(path)))
+        .collect();
+    commands.insert_resource(Models {
+        gltf,
+        // Вложенный ресурс по метке: файл загрузится один раз для обоих запросов
+        fox_mesh: server.load("models/khronos/Fox/Fox.glb#Mesh0"),
+        missing: server.load("textures/does_not_exist.png"),
+        all_ready_logged: false,
+    });
+}
+
+fn report_models(
+    time: Res<Time>,
+    server: Res<AssetServer>,
+    mut models: ResMut<Models>,
+    gltfs: Res<Assets<Gltf>>,
+    meshes: Res<Assets<Mesh>>,
+    images: Res<Assets<Image>>,
+    mut events: MessageReader<AssetEvent<Gltf>>,
+) {
+    for event in events.read() {
+        let AssetEvent::Loaded(id) = event else {
+            continue;
+        };
+        let Some((path, handle)) = models.gltf.iter().find(|(_, h)| h.id() == *id) else {
+            continue;
+        };
+        let Some(gltf) = gltfs.get_loaded(handle) else {
+            continue;
+        };
+        let (vertices, triangles) = gltf
+            .meshes
+            .iter()
+            .filter_map(|mesh| meshes.get_loaded(mesh))
+            .fold((0, 0), |(v, t), mesh| {
+                (v + mesh.vertex_count(), t + mesh.triangle_count())
+            });
+        let name = path.rsplit('/').next().unwrap_or(path);
+        engine::log::info!(
+            "{name}: {:.2} с, мешей {}, вершин {vertices}, треугольников {triangles}, материалов {}, текстур {}, костей {}, анимаций {:?}",
+            time.elapsed().as_secs_f32(),
+            gltf.meshes.len(),
+            gltf.materials.len(),
+            gltf.images.len(),
+            gltf.skins.iter().map(|s| s.joints.len()).sum::<usize>(),
+            gltf.animations,
+        );
+    }
+
+    if models.all_ready_logged {
+        return;
+    }
+    // Ждём, пока всё завершится (успешно или с ошибкой), включая внешние текстуры
+    let pending = models.gltf.iter().any(|(_, h)| {
+        matches!(
+            server.is_loaded_with_dependencies(h.untyped_id()),
+            Ok(false)
+        )
+    });
+    if pending {
+        return;
+    }
+    models.all_ready_logged = true;
+    let (loading, ready, failed) = server.counts();
+    engine::log::info!(
+        "Ресурсы: загружено {ready}, ошибок {failed}, в процессе {loading} — за {:.2} с",
+        time.elapsed().as_secs_f32()
+    );
+    let fox = meshes.get_loaded(&models.fox_mesh).map(Mesh::vertex_count);
+    engine::log::info!("Fox.glb#Mesh0: вершин {fox:?}");
+    if let Some(resolved) = images.get(&models.missing) {
+        engine::log::info!(
+            "Несуществующая текстура: заглушка {}x{}, статус {:?}",
+            resolved.asset.width,
+            resolved.asset.height,
+            resolved.status
+        );
     }
 }
 

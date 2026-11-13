@@ -34,6 +34,9 @@ cargo build -p sandbox --lib --target "$TARGET" ${CARGO_FLAGS[@]+"${CARGO_FLAGS[
 wasm-bindgen --target web --no-typescript \
   --out-dir "$WEB/pkg" "$ROOT/target/$TARGET/$PROFILE/sandbox.wasm"
 
+# Ресурсы отдаёт тот же сервер: ссылка на папку assets (assets.root = "assets")
+ln -sfn ../../assets "$WEB/assets"
+
 echo "Готово: $WEB/pkg"
 if [[ $SERVE -eq 1 ]]; then
   echo "Открой http://localhost:8000"

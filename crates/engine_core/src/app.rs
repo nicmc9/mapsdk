@@ -39,6 +39,7 @@ impl App {
         // Логи нужны уже при сборке плагинов, до запуска цикла платформы
         engine_platform::init_logging();
         engine_platform::profiling::set_thread_name("main");
+        crate::tasks::init_pools();
         let mut world = World::new();
         for stage in Stage::ALL {
             world.add_schedule(Schedule::new(stage));
@@ -192,6 +193,7 @@ impl App {
         // при выходе из области видимости guard уничтожается и зона закрывается (RAII).
         let _frame = tracing::trace_span!("frame").entered();
 
+        crate::tasks::tick_main_thread();
         self.world.resource_mut::<Time>().update(now);
         let delta = self.world.resource::<Time>().delta();
         let steps = self.world.resource_mut::<FixedTime>().accumulate(delta);
