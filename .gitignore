@@ -6,3 +6,7 @@
 
 # Настройки IDE у каждого свои
 /.idea
+
+# Ресурсы с ограниченной или неподтверждённой лицензией (см. assets/LICENSES.md)
+/assets/models/khronos/Sponza
+/assets/models/orc
