@@ -2,7 +2,7 @@
 //!
 //! | Клавиша | Действие |
 //! |---------|----------|
-//! | `` ` `` | показать / скрыть интерфейс (CVar `debug.ui`) |
+//! | `` ` `` или F4 | показать / скрыть интерфейс (CVar `debug.ui`) |
 //! | F1 | сетка (`debug.grid`) |
 //! | F2 | границы мешей (`debug.bounds`) |
 //! | F3 | оси объектов (`debug.axes`) |
@@ -49,6 +49,8 @@ fn hotkeys(input: Res<Input>, ui: Res<Ui>) {
     }
     for (key, cvar) in [
         (Key::Backquote, &DEBUG_UI),
+        // На Mac с ISO-клавиатурой macOS путает коды клавиш ` и § — F4 как запасной вариант
+        (Key::F4, &DEBUG_UI),
         (Key::F1, &DEBUG_GRID),
         (Key::F2, &DEBUG_BOUNDS),
         (Key::F3, &DEBUG_AXES),
@@ -150,7 +152,7 @@ fn stats_window(
                 );
             }
             ui.separator();
-            ui.label("` — интерфейс, F1 — сетка, F2 — границы, F3 — оси");
+            ui.label("` или F4 — интерфейс, F1 — сетка, F2 — границы, F3 — оси");
         });
 }
 

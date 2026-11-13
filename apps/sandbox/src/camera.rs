@@ -1,5 +1,8 @@
-//! Орбитальная камера: мышь (левая кнопка — вращение, колесо — зум),
-//! касания (палец — вращение, щипок — зум), клавиши Q/E — зум.
+//! Орбитальная камера:
+//! - мышь: левая кнопка — вращение, колесо — зум;
+//! - тачпад: два пальца — вращение, щипок — зум;
+//! - сенсорный экран: палец — вращение, щипок — зум;
+//! - клавиши Q/E — зум.
 
 use engine::math::{Quat, Vec3};
 use engine::prelude::*;
@@ -40,6 +43,10 @@ pub fn orbit_camera(
         if let Some(drag) = input.drag_delta().filter(|_| pointer_free) {
             rotate += drag;
         }
+        if pointer_free {
+            // Два пальца по тачпаду: «тянем» сцену за пальцами
+            rotate -= input.trackpad_scroll();
+        }
         orbit.yaw -= rotate.x * ROTATE;
         orbit.pitch = (orbit.pitch - rotate.y * ROTATE).clamp(-1.5, 1.5);
 
@@ -50,6 +57,9 @@ pub fn orbit_camera(
         };
         if let Some(pinch) = input.pinch_delta() {
             zoom += pinch * 0.005;
+        }
+        if pointer_free {
+            zoom += input.trackpad_pinch();
         }
         if input.key_down(Key::Q) {
             zoom += time.delta_secs();

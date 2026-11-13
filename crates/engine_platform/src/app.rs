@@ -83,6 +83,26 @@ impl<H: PlatformHandler> PlatformApp<H> {
         event_loop.set_control_flow(control_flow);
     }
 
+    /// Клавиша — по физическому коду, текст — отдельными символами: один Shift+A даёт
+    /// символ «A» (или «Ф» в другой раскладке).
+    fn keyboard_input(&mut self, event: &winit::event::KeyEvent) {
+        if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key
+            && !event.repeat
+        {
+            self.handler.input(InputEvent::Key {
+                key: crate::input::map_key(code),
+                pressed: event.state.is_pressed(),
+            });
+        }
+        if event.state.is_pressed()
+            && let Some(text) = &event.text
+        {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                self.handler.input(InputEvent::Char(c));
+            }
+        }
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: PlatformError) {
         tracing::error!("{error}");
         self.error.get_or_insert(error);
@@ -139,24 +159,7 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
             WindowEvent::RedrawRequested if self.display_driven && !self.suspended => {
                 self.run_update(event_loop);
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key
-                    && !event.repeat
-                {
-                    self.handler.input(InputEvent::Key {
-                        key: crate::input::map_key(code),
-                        pressed: event.state.is_pressed(),
-                    });
-                }
-                // Текст — отдельно: один физический Shift+A даёт символ «A» (или «Ф» в другой раскладке)
-                if event.state.is_pressed()
-                    && let Some(text) = &event.text
-                {
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        self.handler.input(InputEvent::Char(c));
-                    }
-                }
-            }
+            WindowEvent::KeyboardInput { event, .. } => self.keyboard_input(&event),
             WindowEvent::MouseInput { state, button, .. } => {
                 let button = match button {
                     winit::event::MouseButton::Left => MouseButton::Left,
@@ -180,12 +183,23 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
             }
             #[allow(clippy::cast_possible_truncation)]
             WindowEvent::MouseWheel { delta, .. } => {
-                let delta = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                    // Тачпад: пиксели — приводим примерно к «строкам»
-                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                // Колесо мыши шлёт строки, тачпад — пиксели: это разные жесты
+                let event = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                        InputEvent::MouseWheel { lines: y }
+                    }
+                    winit::event::MouseScrollDelta::PixelDelta(p) => InputEvent::TrackpadScroll {
+                        x: p.x as f32,
+                        y: p.y as f32,
+                    },
                 };
-                self.handler.input(InputEvent::MouseWheel { delta });
+                self.handler.input(event);
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::PinchGesture { delta, .. } => {
+                self.handler.input(InputEvent::TrackpadPinch {
+                    delta: delta as f32,
+                });
             }
             #[allow(clippy::cast_possible_truncation)]
             WindowEvent::Touch(touch) => {

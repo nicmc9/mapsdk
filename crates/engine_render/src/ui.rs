@@ -111,13 +111,22 @@ fn translate(event: InputEvent, ppp: f32, state: &mut UiInputState, out: &mut Ve
                 modifiers: state.modifiers,
             });
         }
-        InputEvent::MouseWheel { delta } => out.push(egui::Event::MouseWheel {
+        InputEvent::MouseWheel { lines } => out.push(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
-            delta: egui::vec2(0.0, delta),
+            delta: egui::vec2(0.0, lines),
             phase: egui::TouchPhase::Move,
             source: egui::MouseWheelSource::Unknown,
             modifiers: state.modifiers,
         }),
+        // Тачпад прокручивает списки интерфейса в пикселях (точках egui)
+        InputEvent::TrackpadScroll { x, y } => out.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(x, y) / ppp,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: state.modifiers,
+        }),
+        InputEvent::TrackpadPinch { delta } => out.push(egui::Event::Zoom(1.0 + delta)),
         // Касание — как мышь одним пальцем
         InputEvent::Touch { phase, x, y, .. } => {
             state.pointer = point(x, y);

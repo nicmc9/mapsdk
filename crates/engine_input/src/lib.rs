@@ -44,6 +44,8 @@ pub struct Input {
     cursor: Option<Vec2>,
     cursor_delta: Vec2,
     scroll: f32,
+    trackpad_scroll: Vec2,
+    trackpad_pinch: f32,
     touches: HashMap<u64, Touch>,
 }
 
@@ -73,9 +75,17 @@ impl Input {
     pub fn cursor_delta(&self) -> Vec2 {
         self.cursor_delta
     }
-    /// Прокрутка за кадр (строки; от себя — положительная).
+    /// Колесо мыши за кадр (строки; от себя — положительная).
     pub fn scroll(&self) -> f32 {
         self.scroll
+    }
+    /// Прокрутка двумя пальцами по тачпаду за кадр (пиксели).
+    pub fn trackpad_scroll(&self) -> Vec2 {
+        self.trackpad_scroll
+    }
+    /// Щипок на тачпаде за кадр (изменение масштаба; раздвинуть пальцы — положительное).
+    pub fn trackpad_pinch(&self) -> f32 {
+        self.trackpad_pinch
     }
     pub fn touches(&self) -> impl Iterator<Item = &Touch> {
         self.touches.values()
@@ -108,6 +118,8 @@ impl Input {
         self.buttons_pressed.clear();
         self.cursor_delta = Vec2::ZERO;
         self.scroll = 0.0;
+        self.trackpad_scroll = Vec2::ZERO;
+        self.trackpad_pinch = 0.0;
         for touch in self.touches.values_mut() {
             touch.previous = touch.position;
         }
@@ -148,7 +160,9 @@ impl Input {
                 }
                 self.cursor = Some(position);
             }
-            InputEvent::MouseWheel { delta } => self.scroll += delta,
+            InputEvent::MouseWheel { lines } => self.scroll += lines,
+            InputEvent::TrackpadScroll { x, y } => self.trackpad_scroll += Vec2::new(x, y),
+            InputEvent::TrackpadPinch { delta } => self.trackpad_pinch += delta,
             InputEvent::Char(_) => {} // текст читают текстовые поля (UI)
             InputEvent::Touch { id, phase, x, y } => {
                 let position = Vec2::new(x, y);
