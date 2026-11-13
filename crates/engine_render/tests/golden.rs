@@ -99,11 +99,8 @@ fn compare(name: &str, shot: &engine_render::Screenshot) {
     #[allow(clippy::cast_precision_loss)]
     let share = different as f64 / total as f64;
     if share > 0.005 {
-        let actual = format!(
-            "{}/target/golden-{name}-actual.png",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let _ = std::fs::create_dir_all(format!("{}/target", env!("CARGO_MANIFEST_DIR")));
+        // CARGO_TARGET_TMPDIR — временная папка интеграционных тестов внутри общего target/
+        let actual = format!("{}/golden-{name}-actual.png", env!("CARGO_TARGET_TMPDIR"));
         let _ = engine_render::save_png(shot, &actual);
         panic!(
             "{name}: отличается {:.2}% пикселей (допуск 0.5%). Кадр: {actual}",
