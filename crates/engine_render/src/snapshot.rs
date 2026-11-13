@@ -22,6 +22,8 @@ pub(crate) struct FrameSnapshot {
     pub draws: Vec<DrawItem>,
     /// Отладочные линии (пары вершин), уже в мировых координатах.
     pub lines: Vec<crate::debug_draw::LineVertex>,
+    /// Матрицы костей всех скелетных мешей кадра подряд; `DrawItem::skin` — начало своих.
+    pub joints: Vec<Mat4>,
     pub ui: crate::ui::UiFrame,
 }
 
@@ -51,6 +53,9 @@ pub(crate) struct DrawItem {
     pub material: Option<AssetId<Material>>,
     pub prev: Mat4,
     pub curr: Mat4,
+    /// Скелетный меш: начало и число матриц в `FrameSnapshot::joints`. `prev`/`curr` тогда —
+    /// поза привязки, только для отсечения.
+    pub skin: Option<(u32, u32)>,
 }
 
 impl FrameSnapshot {

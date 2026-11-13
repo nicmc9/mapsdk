@@ -9,8 +9,8 @@ use engine_ecs::prelude::*;
 use engine_math::Mat4;
 use engine_platform::Instant;
 use engine_scene::{
-    AmbientLight, Camera, DirectionalLight, GlobalTransform, Mesh3d, PointLight, Visibility,
-    is_visible,
+    AmbientLight, Camera, DirectionalLight, GlobalTransform, Mesh3d, PointLight, SkinnedMesh,
+    Visibility, is_visible,
 };
 
 use crate::ClearColor;
@@ -82,6 +82,29 @@ pub(crate) fn sync_assets(
     }
 }
 
+/// Максимум костей на скелет — размер массива в шейдере.
+pub(crate) const MAX_JOINTS: usize = 256;
+
+/// Матрицы костей: мировая матрица кости × обратная матрица привязки.
+fn push_joints(
+    joints: &mut Vec<Mat4>,
+    skin: &SkinnedMesh,
+    globals: &Query<&GlobalTransform>,
+) -> (u32, u32) {
+    let start = u32::try_from(joints.len()).unwrap_or(u32::MAX);
+    for (entity, inverse_bind) in skin
+        .joints
+        .iter()
+        .zip(&skin.inverse_bind_matrices)
+        .take(MAX_JOINTS)
+    {
+        let global = globals.get(*entity).map_or(Mat4::IDENTITY, |g| g.0);
+        joints.push(global * *inverse_bind);
+    }
+    let count = u32::try_from(joints.len()).unwrap_or(u32::MAX) - start;
+    (start, count)
+}
+
 /// Трансформ объекта на двух последних шагах логики — для интерполяции.
 #[derive(Default)]
 pub(crate) struct InterpolationState {
@@ -115,7 +138,8 @@ pub(crate) fn extract_frame(
     cameras: Query<(Entity, &Camera, &GlobalTransform)>,
     suns: Query<(&DirectionalLight, &GlobalTransform)>,
     points: Query<(&PointLight, &GlobalTransform)>,
-    objects: Query<(Entity, &Mesh3d, &GlobalTransform)>,
+    objects: Query<(Entity, &Mesh3d, &GlobalTransform, Option<&SkinnedMesh>)>,
+    globals: Query<&GlobalTransform>,
     visibility: Query<(&Visibility, Option<&ChildOf>)>,
     mut frontend: NonSendMut<RenderFrontend>,
     mut debug: ResMut<crate::DebugDraw>,
@@ -172,7 +196,8 @@ pub(crate) fn extract_frame(
     }));
 
     snapshot.draws.clear();
-    for (entity, mesh3d, global) in &objects {
+    snapshot.joints.clear();
+    for (entity, mesh3d, global, skinned) in &objects {
         if !is_visible(entity, &visibility) {
             continue;
         }
@@ -180,6 +205,9 @@ pub(crate) fn extract_frame(
             continue;
         };
         let (prev, curr) = state.update(entity, global.0, stepped);
+        let skin = skinned
+            .filter(|_| mesh.primitives.iter().any(|p| !p.joints.is_empty()))
+            .map(|skin| push_joints(&mut snapshot.joints, skin, &globals));
         for (index, _) in mesh.primitives.iter().enumerate() {
             snapshot.draws.push(DrawItem {
                 mesh: mesh3d.mesh.id(),
@@ -190,6 +218,7 @@ pub(crate) fn extract_frame(
                     .and_then(|m| m.as_ref().map(engine_assets::Handle::id)),
                 prev,
                 curr,
+                skin,
             });
         }
     }

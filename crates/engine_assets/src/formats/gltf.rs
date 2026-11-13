@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use engine_core::tasks::BoxedFuture;
 use engine_math::{Aabb, Quat, Vec3};
 
+use super::animation::{AnimationClip, Channel, Interpolation, Keyframes};
 use super::image::{ColorSpace, Image};
 use crate::{Asset, AssetError, AssetLoader, Bytes, Handle, LoadContext};
 
@@ -124,8 +125,8 @@ pub struct Gltf {
     /// Корневые узлы каждой сцены.
     pub scenes: Vec<Vec<usize>>,
     pub default_scene: Option<usize>,
-    /// Имена анимаций. Сами анимации — итерация 2.
-    pub animations: Vec<String>,
+    /// Анимационные клипы (вложенные ресурсы `файл.glb#Animation0`).
+    pub animations: Vec<Handle<AnimationClip>>,
 }
 
 impl Asset for Gltf {}
@@ -191,9 +192,10 @@ async fn load_gltf(bytes: &[u8], ctx: &mut LoadContext) -> Result<Gltf, AssetErr
             .map(|scene| scene.nodes().map(|n| n.index()).collect())
             .collect(),
         default_scene: document.default_scene().map(|s| s.index()),
-        animations: document
-            .animations()
-            .map(|a| a.name().unwrap_or_default().to_owned())
+        animations: read_animations(&document, &buffers)
+            .into_iter()
+            .enumerate()
+            .map(|(index, clip)| ctx.add_labeled(&format!("Animation{index}"), clip))
             .collect(),
     })
 }
@@ -339,6 +341,54 @@ fn read_meshes(
         meshes.push(ctx.add_labeled(&format!("Mesh{}", mesh.index()), Mesh { name, primitives }));
     }
     Ok(meshes)
+}
+
+fn read_animations(document: &gltf::Document, buffers: &[Bytes]) -> Vec<AnimationClip> {
+    use gltf::animation::util::ReadOutputs;
+    document
+        .animations()
+        .map(|animation| {
+            let mut duration = 0.0f32;
+            let channels = animation
+                .channels()
+                .filter_map(|channel| {
+                    let reader =
+                        channel.reader(|buffer| buffers.get(buffer.index()).map(|b| &b[..]));
+                    let times: Vec<f32> = reader.read_inputs()?.collect();
+                    let keyframes = match reader.read_outputs()? {
+                        ReadOutputs::Translations(v) => {
+                            Keyframes::Translation(v.map(Vec3::from_array).collect())
+                        }
+                        ReadOutputs::Scales(v) => {
+                            Keyframes::Scale(v.map(Vec3::from_array).collect())
+                        }
+                        ReadOutputs::Rotations(v) => {
+                            Keyframes::Rotation(v.into_f32().map(Quat::from_array).collect())
+                        }
+                        // Морфинг (веса морф-таргетов) — позже
+                        ReadOutputs::MorphTargetWeights(_) => return None,
+                    };
+                    duration = duration.max(times.last().copied().unwrap_or(0.0));
+                    let interpolation = match channel.sampler().interpolation() {
+                        gltf::animation::Interpolation::Step => Interpolation::Step,
+                        gltf::animation::Interpolation::Linear => Interpolation::Linear,
+                        gltf::animation::Interpolation::CubicSpline => Interpolation::CubicSpline,
+                    };
+                    Some(Channel {
+                        node: channel.target().node().index(),
+                        times,
+                        keyframes,
+                        interpolation,
+                    })
+                })
+                .collect();
+            AnimationClip {
+                name: animation.name().unwrap_or_default().to_owned(),
+                duration,
+                channels,
+            }
+        })
+        .collect()
 }
 
 fn read_nodes(document: &gltf::Document) -> Vec<Node> {

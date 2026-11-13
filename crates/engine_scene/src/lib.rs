@@ -6,6 +6,7 @@
 //! - [`Camera`], [`DirectionalLight`], [`PointLight`], ресурс [`AmbientLight`].
 //! - [`SceneRoot`] — разворачивает glTF в дерево сущностей, когда файл загрузится.
 
+mod animation;
 mod components;
 mod gltf_scene;
 mod propagate;
@@ -13,6 +14,7 @@ mod propagate;
 use engine_core::{App, Plugin, Stage};
 use engine_ecs::prelude::IntoScheduleConfigs;
 
+pub use animation::{AnimationPlayer, SceneNodes};
 pub use components::{
     AmbientLight, Camera, DirectionalLight, GlobalTransform, Mesh3d, PointLight, Transform,
     Visibility,
@@ -28,6 +30,7 @@ impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AmbientLight>()
             .add_systems(Stage::PreUpdate, gltf_scene::spawn_gltf_scenes)
+            .add_systems(Stage::FixedUpdate, animation::animate)
             .add_systems(
                 Stage::PostUpdate,
                 (

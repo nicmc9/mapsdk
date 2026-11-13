@@ -41,6 +41,13 @@ struct Object {
 
 @group(2) @binding(0) var<uniform> object: Object;
 
+// Матрицы костей скелетного меша: мировая матрица кости × обратная матрица привязки.
+// Uniform, а не storage: на тире GLES3 storage-буферов в вершинном шейдере может не быть.
+struct Joints {
+    matrices: array<mat4x4<f32>, 256>,
+};
+@group(3) @binding(0) var<uniform> joints: Joints;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -61,6 +68,28 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_position = frame.view_proj * world;
     out.world_position = world.xyz;
     out.world_normal = (object.normal_matrix * vec4<f32>(in.normal, 0.0)).xyz;
+    out.uv = in.uv;
+    return out;
+}
+
+// Скиннинг: вершина — взвешенная сумма положений по четырём костям.
+// Матрицы костей уже мировые, матрица модели не нужна.
+@vertex
+fn vs_skinned(
+    in: VertexInput,
+    @location(3) joint_indices: vec4<u32>,
+    @location(4) joint_weights: vec4<f32>,
+) -> VertexOutput {
+    let skin = joints.matrices[joint_indices.x] * joint_weights.x
+        + joints.matrices[joint_indices.y] * joint_weights.y
+        + joints.matrices[joint_indices.z] * joint_weights.z
+        + joints.matrices[joint_indices.w] * joint_weights.w;
+    let world = skin * vec4<f32>(in.position, 1.0);
+    var out: VertexOutput;
+    out.clip_position = frame.view_proj * world;
+    out.world_position = world.xyz;
+    // Нормаль — той же матрицей (верно при равномерном масштабе костей)
+    out.world_normal = (skin * vec4<f32>(in.normal, 0.0)).xyz;
     out.uv = in.uv;
     return out;
 }

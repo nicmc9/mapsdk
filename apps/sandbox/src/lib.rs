@@ -38,7 +38,13 @@ impl Plugin for SandboxPlugin {
             .add_systems(Stage::Startup, scenes::setup)
             .add_systems(
                 Stage::Update,
-                (scenes::fit_models, camera::orbit_camera, report_stats),
+                (
+                    scenes::fit_models,
+                    scenes::autoplay,
+                    scenes::next_clip,
+                    camera::orbit_camera,
+                    report_stats,
+                ),
             );
     }
 }

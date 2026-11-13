@@ -3,9 +3,10 @@
 use std::borrow::Cow;
 
 use engine::CVarString;
-use engine::assets::formats::Mesh;
+use engine::assets::formats::{AnimationClip, Gltf, Mesh};
 use engine::math::{Aabb, Vec3};
 use engine::prelude::*;
+use engine::scene::{AnimationPlayer, SceneNodes};
 
 use crate::camera::OrbitCamera;
 
@@ -138,5 +139,51 @@ pub fn fit_models(
             size.to_array()
         );
         commands.entity(root).remove::<FitTo>();
+    }
+}
+
+/// Развёрнутые сцены, у которых ещё нет проигрывателя.
+// [Rust] Псевдоним типа для длинного фильтра запроса — как `using` в C++
+type WithoutPlayer = (With<SceneNodes>, Without<AnimationPlayer>);
+
+/// Как только сцена с анимациями развернулась — запускаем первый клип.
+pub fn autoplay(
+    mut commands: Commands,
+    roots: Query<(Entity, &SceneRoot), WithoutPlayer>,
+    gltfs: Res<Assets<Gltf>>,
+) {
+    for (entity, root) in &roots {
+        let Some(clip) = gltfs.get_loaded(&root.0).and_then(|g| g.animations.first()) else {
+            continue;
+        };
+        let mut player = AnimationPlayer::default();
+        player.play(clip.clone());
+        commands.entity(entity).insert(player);
+    }
+}
+
+/// N — плавный переход на следующий клип у всех моделей.
+pub fn next_clip(
+    input: Res<Input>,
+    gltfs: Res<Assets<Gltf>>,
+    clips: Res<Assets<AnimationClip>>,
+    mut players: Query<(&SceneRoot, &mut AnimationPlayer)>,
+) {
+    if !input.key_pressed(Key::N) {
+        return;
+    }
+    for (root, mut player) in &mut players {
+        let Some(gltf) = gltfs.get_loaded(&root.0) else {
+            continue;
+        };
+        let current = player
+            .current_clip()
+            .and_then(|c| gltf.animations.iter().position(|h| h == c))
+            .unwrap_or(0);
+        let next = gltf.animations[(current + 1) % gltf.animations.len()].clone();
+        if let Some(clip) = clips.get_loaded(&next) {
+            engine::log::info!("Анимация: {}", clip.name);
+        }
+        player.crossfade(next, 0.4);
     }
 }

@@ -68,7 +68,9 @@ pub(crate) fn spawn_gltf_scenes(
                 });
             }
         }
-        commands.entity(root).insert(SceneSpawned);
+        commands
+            .entity(root)
+            .insert((SceneSpawned, crate::animation::SceneNodes(entities)));
         tracing::debug!("Сцена glTF развёрнута: {} узлов", gltf.nodes.len());
     }
 }
