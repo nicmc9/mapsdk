@@ -8,7 +8,7 @@ fn main() -> ExitCode {
     match sandbox::run(engine::platform::LaunchContext::default()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            log::error!("Приложение завершилось с ошибкой: {error}");
+            engine::log::error!("Приложение завершилось с ошибкой: {error}");
             ExitCode::FAILURE
         }
     }

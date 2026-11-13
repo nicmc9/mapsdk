@@ -29,15 +29,25 @@
 |-------|-----------|--------------|--------|
 | `wgpu` 30 | Графический API поверх Vulkan, Metal, GLES и WebGPU в браузере | Dawn / bgfx / Diligent Engine | Решение из README. Включены бэкенды Vulkan, Metal, GLES (Android) и WebGPU; DX12 и WebGL2 отключены |
 
-## Логирование (временное, до задачи K-03)
+## Логи и профилирование
 
 | Крейт | Что делает | Аналог в C++ | Почему |
 |-------|-----------|--------------|--------|
-| `log` | Фасад логирования: макросы `info!`, `error!`; сам ничего не выводит | интерфейс spdlog без sink'ов | Библиотеки пишут в `log`, приложение выбирает вывод |
-| `env_logger` | Вывод `log` в stderr, уровень через `RUST_LOG` | spdlog stdout sink | Desktop и iOS-симулятор |
-| `android_logger` | Вывод `log` в logcat | `__android_log_print` | Android |
-| `console_log` | Вывод `log` в консоль браузера | — | Web |
+| `tracing` | Фасад логов и зон: события (`info!`) и спаны — интервалы времени со своими полями | spdlog + макросы зон Tracy в одном | Стандарт в Rust. Спан — это сразу и контекст для логов, и зона профайлера |
+| `tracing-subscriber` | Сборка обработчиков из слоёв: форматирование, фильтр, перезагрузка фильтра на лету | sink'и spdlog | Включает мост `log` → `tracing`: логи `wgpu`, `winit` приходят сюда же |
+| `tracing-logcat` | Вывод в logcat Android | `__android_log_write` | Android |
+| `tracing-oslog` | Вывод в `os_log` (Console.app, Xcode) | `os_log` | iOS-устройство. В симуляторе — stderr, чтобы видеть логи в терминале |
+| `tracing-web` | Вывод в консоль браузера | — | Web |
+| `tracing-tracy`, `tracy-client` | Отправка спанов и кадров в Tracy | Tracy client (`ZoneScoped`, `FrameMark`) | Только с фичей `profiling`. Собирает C++-код Tracy при сборке |
+| `log` | Старый фасад логов | — | Нужен только для моста: на нём пишут `wgpu` и `winit` |
 | `console_error_panic_hook` | Печать паники в консоль браузера с сообщением и местом | — | Без него на Web паника выглядит как `unreachable executed` |
+
+## Конфигурация
+
+| Крейт | Что делает | Аналог в C++ | Почему |
+|-------|-----------|--------------|--------|
+| `toml` | Разбор TOML | toml++ | Файлы конфигурации CVar. TOML проще JSON для людей: комментарии, таблицы |
+| `js-sys` | Доступ к стандартным объектам JavaScript | — | Чтение параметров URL на Web |
 
 ## Ошибки
 

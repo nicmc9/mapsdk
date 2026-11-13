@@ -5,7 +5,10 @@ use engine_ecs::{Schedule, ScheduleSystem, Schedules};
 use engine_platform::{Instant, LaunchContext, PlatformConfig, PlatformError};
 
 use crate::window::MainWindow;
-use crate::{AppLifecycle, FixedTime, LifecycleHook, Plugin, Stage, Time, Window, WindowResized};
+use crate::{
+    AnyCVar, AppLifecycle, CHEATS, CVarSource, CVars, FixedTime, LOG_FILTER, LifecycleHook, Plugin,
+    SIM_HZ, SIM_MAX_STEPS, Stage, Time, Window, WindowResized,
+};
 
 /// Приложение движка: мир ECS, расписания стадий и подключённые плагины.
 ///
@@ -35,6 +38,7 @@ impl App {
     pub fn new() -> Self {
         // Логи нужны уже при сборке плагинов, до запуска цикла платформы
         engine_platform::init_logging();
+        engine_platform::profiling::set_thread_name("main");
         let mut world = World::new();
         for stage in Stage::ALL {
             world.add_schedule(Schedule::new(stage));
@@ -50,7 +54,27 @@ impl App {
             lifecycle_hooks: Vec::new(),
             started: false,
         };
-        app.add_systems(Stage::First, engine_ecs::message_update_system);
+        app.add_systems(
+            Stage::First,
+            (
+                engine_ecs::message_update_system,
+                crate::settings::apply_core_settings,
+            ),
+        );
+
+        // Аргументы запуска читаем сразу: у них приоритет выше, чем у файла конфигурации,
+        // который проект загрузит позже через load_config_toml
+        let mut cvars = CVars::default();
+        for (name, value) in engine_platform::launch_arguments() {
+            if let Err(error) = cvars.set(&name, &value, CVarSource::LaunchArguments) {
+                tracing::error!("Аргумент запуска: {error}");
+            }
+        }
+        app.insert_resource(cvars);
+        app.register_cvar(&CHEATS)
+            .register_cvar(&SIM_HZ)
+            .register_cvar(&SIM_MAX_STEPS)
+            .register_cvar(&LOG_FILTER);
         app.add_message::<WindowResized>()
             .add_message::<AppLifecycle>();
         app
@@ -62,7 +86,7 @@ impl App {
     pub fn add_plugin(&mut self, plugin: impl Plugin) -> &mut Self {
         let name = plugin.name();
         assert!(self.plugin_names.insert(name), "плагин {name} уже добавлен");
-        log::debug!("Плагин: {name}");
+        tracing::debug!("Плагин: {name}");
         plugin.build(self);
         self.plugins.push(Box::new(plugin));
         self
@@ -86,6 +110,29 @@ impl App {
         self.world
             .resource_mut::<Schedules>()
             .add_systems(stage, systems);
+        self
+    }
+
+    /// Регистрирует переменную конфигурации (см. [`crate::CVar`]).
+    pub fn register_cvar(&mut self, cvar: &'static dyn AnyCVar) -> &mut Self {
+        self.world.resource_mut::<CVars>().register(cvar);
+        self
+    }
+
+    /// Загружает переменные из текста TOML. Вызывайте до добавления плагинов, чтобы
+    /// значения «только при запуске» успели примениться.
+    ///
+    /// ```ignore
+    /// app.load_config_toml(include_str!("../config.toml"));
+    /// ```
+    pub fn load_config_toml(&mut self, text: &str) -> &mut Self {
+        if let Err(error) = self
+            .world
+            .resource_mut::<CVars>()
+            .load_toml(text, CVarSource::File)
+        {
+            tracing::error!("Ошибка в конфигурации: {error}");
+        }
         self
     }
 
@@ -141,24 +188,34 @@ impl App {
         if !self.started {
             self.startup();
         }
+        // [Rust] `_frame` держит зону профайлера открытой до конца функции:
+        // при выходе из области видимости guard уничтожается и зона закрывается (RAII).
+        let _frame = tracing::trace_span!("frame").entered();
 
         self.world.resource_mut::<Time>().update(now);
         let delta = self.world.resource::<Time>().delta();
         let steps = self.world.resource_mut::<FixedTime>().accumulate(delta);
 
         for stage in Stage::PER_FRAME_BEFORE_FIXED {
-            self.world.run_schedule(stage);
+            self.run_stage(stage);
         }
         for _ in 0..steps {
             // Сначала сдвигаем время, чтобы системы шага видели время этого шага
             self.world.resource_mut::<FixedTime>().consume_step();
-            self.world.run_schedule(Stage::FixedUpdate);
+            self.run_stage(Stage::FixedUpdate);
         }
         for stage in Stage::PER_FRAME_AFTER_FIXED {
-            self.world.run_schedule(stage);
+            self.run_stage(stage);
         }
         // Сброс флагов Added/Changed для следующего кадра
         self.world.clear_trackers();
+        let cpu_time = now.elapsed();
+        self.world.resource_mut::<Time>().set_cpu_time(cpu_time);
+    }
+
+    fn run_stage(&mut self, stage: Stage) {
+        let _zone = tracing::trace_span!("stage", ?stage).entered();
+        self.world.run_schedule(stage);
     }
 
     /// Когда нужен следующий кадр: к моменту очередного шага логики.
@@ -192,6 +249,7 @@ impl App {
             plugin.finish(self);
         }
         self.plugins = plugins;
+        self.world.resource_mut::<CVars>().mark_started();
         self.world.run_schedule(Stage::Startup);
     }
 }

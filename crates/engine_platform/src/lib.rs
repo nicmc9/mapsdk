@@ -6,6 +6,7 @@
 // [Rust] `mod` подключает файл как модуль (аналог #include + namespace сразу).
 // Без `pub` модуль виден только внутри крейта.
 mod app;
+mod args;
 mod config;
 mod error;
 mod handler;
@@ -13,13 +14,16 @@ mod launch;
 mod logging;
 mod window;
 
+pub mod profiling;
+
 // [Rust] `pub use` — реэкспорт: пользователь пишет `engine_platform::PlatformConfig`,
 // не зная, в каком файле тип объявлен. Аналог `using` в заголовке namespace.
+pub use args::launch_arguments;
 pub use config::PlatformConfig;
 pub use error::PlatformError;
 pub use handler::{NextUpdate, PlatformHandler};
 pub use launch::LaunchContext;
-pub use logging::init_logging;
+pub use logging::{DEFAULT_LOG_FILTER, init_logging, set_log_filter};
 pub use window::{PlatformWindow, WindowSize};
 
 /// Время, работающее на всех платформах.
@@ -44,7 +48,7 @@ pub fn run<H: PlatformHandler>(
     handler: H,
 ) -> Result<(), PlatformError> {
     init_logging();
-    log::info!("Запуск: {config:?}");
+    tracing::info!("Запуск: {config:?}");
 
     let event_loop = build_event_loop(launch)?;
     let app = app::PlatformApp::new(config, handler);

@@ -14,4 +14,4 @@ engine_core = { workspace = true }
 engine_ecs = { workspace = true }
 engine_platform = { workspace = true }
 wgpu = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }

@@ -15,4 +15,4 @@ mod renderer;
 mod snapshot;
 
 pub use color::Color;
-pub use frontend::{ClearColor, RenderMode, RenderPlugin, RenderStats};
+pub use frontend::{ClearColor, RENDER_MODE, RenderMode, RenderPlugin, RenderStats};

@@ -1,0 +1,13 @@
+# Конфигурация sandbox. Имя переменной = путь в таблицах: [sim] hz → sim.hz.
+# Переопределить при запуске: cargo run -p sandbox -- --cvar sim.hz=30
+# На Web: http://localhost:8000/?sim.hz=30
+
+[sim]
+hz = 60          # частота шага логики
+max_steps = 5    # максимум шагов логики за кадр
+
+[log]
+# filter = "info,engine_render=debug"
+
+[render]
+# mode = "inline"   # threaded (по умолчанию на native) или inline

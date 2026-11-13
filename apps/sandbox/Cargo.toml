@@ -18,7 +18,6 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 engine = { workspace = true }
-log = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

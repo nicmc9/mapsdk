@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 engine_ecs = { workspace = true }
 engine_platform = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
 crossbeam-channel = { workspace = true }
 triple_buffer = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }

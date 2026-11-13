@@ -57,6 +57,7 @@ impl PlatformHandler for AppRunner {
     #[cfg(target_arch = "wasm32")]
     fn update(&mut self) -> NextUpdate {
         self.app.update_at(Instant::now());
+        engine_platform::profiling::frame_mark();
         NextUpdate::NextDisplayFrame
     }
 
@@ -72,13 +73,14 @@ impl PlatformHandler for AppRunner {
             return NextUpdate::At(next);
         }
         self.app.update_at(now);
+        engine_platform::profiling::frame_mark();
         let next = self.app.next_update_time(now);
         self.next_frame = Some(next);
         NextUpdate::At(next)
     }
 
     fn exiting(&mut self) {
-        log::info!("Остановка приложения");
+        tracing::info!("Остановка приложения");
         self.app.run_lifecycle_hooks(&LifecycleHook::Exiting);
     }
 }

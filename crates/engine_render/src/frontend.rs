@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use engine_core::sync::mailbox::{MailboxSender, mailbox};
 use engine_core::sync::reply::reply;
 use engine_core::sync::triple_buffer::{Producer, triple_buffer};
-use engine_core::{App, FixedTime, LifecycleHook, Plugin, Stage, Time};
+use engine_core::{App, CVar, CVarFlags, CVarValue, FixedTime, LifecycleHook, Plugin, Stage, Time};
 use engine_ecs::prelude::*;
 use engine_platform::{Duration, Instant, PlatformWindow};
 
@@ -22,21 +22,53 @@ pub enum RenderMode {
     Inline,
 }
 
+impl RenderMode {
+    /// Режим по умолчанию для платформы.
+    // [Rust] `cfg!(...)` — условие на этапе компиляции, но в виде обычного bool:
+    // обе ветки должны компилироваться, лишняя выбрасывается оптимизатором.
+    pub const PLATFORM_DEFAULT: Self = if cfg!(target_arch = "wasm32") {
+        Self::Inline
+    } else {
+        Self::Threaded
+    };
+}
+
 impl Default for RenderMode {
     fn default() -> Self {
-        if cfg!(target_arch = "wasm32") {
-            Self::Inline
-        } else {
-            Self::Threaded
-        }
+        Self::PLATFORM_DEFAULT
     }
 }
 
-/// Подключает рендер.
-#[derive(Debug, Default)]
-pub struct RenderPlugin {
-    pub mode: RenderMode,
+// Чтобы режим можно было хранить в CVar: разбор из строки и обратно
+impl CVarValue for RenderMode {
+    const TYPE_NAME: &'static str = "threaded | inline";
+    fn parse(text: &str) -> Result<Self, String> {
+        match text.trim() {
+            "threaded" => Ok(Self::Threaded),
+            "inline" => Ok(Self::Inline),
+            other => Err(format!("ожидается threaded или inline, получено «{other}»")),
+        }
+    }
+    fn format(&self) -> String {
+        match self {
+            Self::Threaded => "threaded",
+            Self::Inline => "inline",
+        }
+        .to_owned()
+    }
 }
+
+/// Режим рендера. Читается при добавлении `RenderPlugin`.
+pub static RENDER_MODE: CVar<RenderMode> = CVar::new(
+    "render.mode",
+    RenderMode::PLATFORM_DEFAULT,
+    "Где выполняется рендер: threaded (свой поток) или inline (главный поток)",
+)
+.with_flags(CVarFlags::STARTUP);
+
+/// Подключает рендер. Режим берётся из CVar `render.mode`.
+#[derive(Debug, Default)]
+pub struct RenderPlugin;
 
 /// Цвет фона. Меняйте в `FixedUpdate` — рендер плавно интерполирует между шагами.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -49,6 +81,8 @@ pub struct RenderStats {
     pub frames_rendered: u64,
     /// Снимков, которые рендер не успел увидеть (перезаписаны более новыми).
     pub snapshots_skipped: u64,
+    /// Время работы последнего кадра рендера на CPU (без ожидания кадра экрана).
+    pub frame_cpu_time: Duration,
 }
 
 /// Сторона главного потока: отправляет команды и снимки рендеру.
@@ -74,22 +108,24 @@ enum Backend {
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
+        app.register_cvar(&RENDER_MODE);
+        let mode = RENDER_MODE.get();
         let (commands_tx, commands_rx) = mailbox("render");
         let (producer, consumer) = triple_buffer(&FrameSnapshot::default());
         let stats = Arc::new(SharedStats::default());
         let renderer = Renderer::new(commands_rx, consumer, Arc::clone(&stats));
 
-        let backend = match self.mode {
+        let backend = match mode {
             #[cfg(not(target_arch = "wasm32"))]
             RenderMode::Threaded => Backend::Threaded(Some(spawn_render_thread(renderer))),
             #[cfg(target_arch = "wasm32")]
             RenderMode::Threaded => {
-                log::warn!("На Web нет потоков, рендер работает в главном потоке");
+                tracing::warn!("На Web нет потоков, рендер работает в главном потоке");
                 Backend::Inline(Box::new(renderer))
             }
             RenderMode::Inline => Backend::Inline(Box::new(renderer)),
         };
-        log::info!("Рендер: режим {:?}", self.mode);
+        tracing::info!("Рендер: режим {mode:?}");
 
         app.world_mut().insert_non_send(RenderFrontend {
             commands: commands_tx,
@@ -118,7 +154,8 @@ fn spawn_render_thread(mut renderer: Renderer) -> std::thread::JoinHandle<()> {
         // [Rust] `move` — замыкание забирает renderer себе (перемещение в новый поток).
         // Компилятор проверяет, что Renderer: Send, иначе не соберётся.
         .spawn(move || {
-            log::info!("Поток рендера запущен");
+            engine_platform::profiling::set_thread_name("render");
+            tracing::info!("Поток рендера запущен");
             loop {
                 if renderer.is_idle() && renderer.wait_command() == Flow::Exit {
                     break;
@@ -132,7 +169,7 @@ fn spawn_render_thread(mut renderer: Renderer) -> std::thread::JoinHandle<()> {
                     std::thread::sleep(Duration::from_millis(4));
                 }
             }
-            log::info!("Поток рендера остановлен");
+            tracing::info!("Поток рендера остановлен");
         })
         .expect("не удалось создать поток рендера")
 }
@@ -172,7 +209,7 @@ impl RenderFrontend {
                     size: window.size(),
                 });
             }
-            Err(error) => log::error!("Не удалось создать surface: {error}"),
+            Err(error) => tracing::error!("Не удалось создать surface: {error}"),
         }
         self.pump_inline();
     }
@@ -187,9 +224,9 @@ impl RenderFrontend {
         self.pump_inline();
         let started = Instant::now();
         if reply_rx.wait(Duration::from_secs(2)).is_some() {
-            log::info!("Surface отпущен за {:?}", started.elapsed());
+            tracing::info!("Surface отпущен за {:?}", started.elapsed());
         } else {
-            log::error!("Рендер не отпустил surface за 2 с");
+            tracing::error!("Рендер не отпустил surface за 2 с");
         }
     }
 
@@ -203,7 +240,7 @@ impl RenderFrontend {
                 if let Some(handle) = handle.take()
                     && handle.join().is_err()
                 {
-                    log::error!("Поток рендера завершился паникой");
+                    tracing::error!("Поток рендера завершился паникой");
                 }
             }
             Backend::Inline(_) => {}
@@ -265,4 +302,6 @@ fn render_inline(mut frontend: NonSendMut<RenderFrontend>) {
 fn update_stats(frontend: NonSend<RenderFrontend>, mut stats: ResMut<RenderStats>) {
     stats.frames_rendered = frontend.stats.frames_rendered.load(Ordering::Relaxed);
     stats.snapshots_skipped = frontend.stats.snapshots_skipped.load(Ordering::Relaxed);
+    stats.frame_cpu_time =
+        Duration::from_nanos(frontend.stats.frame_cpu_nanos.load(Ordering::Relaxed));
 }

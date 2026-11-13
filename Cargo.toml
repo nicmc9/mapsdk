@@ -35,9 +35,17 @@ wgpu = { version = "30.0.2", default-features = false, features = ["std", "parki
 bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "async_executor"] }
 log = "0.4.35"
 thiserror = "2.0.21"
-env_logger = "0.11.11"
-android_logger = "0.15.1"
-console_log = "1.1.0"
+# Логи и профилирование (описание — docs/crates.md)
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-logcat = "0.1.0"
+tracing-oslog = "0.3.0"
+tracing-web = "0.1.4"
+# Tracy: только то, что нужно для зон и кадров; клиент активен, пока подключён Tracy GUI
+tracing-tracy = { version = "0.12.0", default-features = false, features = ["enable", "ondemand"] }
+tracy-client = { version = "0.19.0", default-features = false, features = ["enable", "ondemand"] }
+toml = "1.2.1"
+js-sys = "0.3"
 console_error_panic_hook = "0.1.7"
 # [Rust] Версия закреплена точно ("="): CLI `wasm-bindgen` должен совпадать с ней до патча,
 # иначе сборка под Web падает с ошибкой несовпадения схемы.

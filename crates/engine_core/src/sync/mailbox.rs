@@ -62,7 +62,7 @@ impl<T> MailboxSender<T> {
         let warn_at = self.warn_at.load(Ordering::Relaxed);
         if len >= warn_at {
             self.warn_at.store(warn_at * 2, Ordering::Relaxed);
-            log::warn!("Очередь «{}» растёт: {len} сообщений", self.name);
+            tracing::warn!("Очередь «{}» растёт: {len} сообщений", self.name);
         }
         true
     }

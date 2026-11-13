@@ -14,6 +14,7 @@ use crate::snapshot::FrameSnapshot;
 pub(crate) struct SharedStats {
     pub frames_rendered: AtomicU64,
     pub snapshots_skipped: AtomicU64,
+    pub frame_cpu_nanos: AtomicU64,
 }
 
 /// Продолжать работу или завершиться.
@@ -90,7 +91,7 @@ impl Renderer {
     }
 
     fn handle(&mut self, command: RenderCommand) -> Flow {
-        log::debug!("Рендер: команда {command:?}");
+        tracing::debug!("Рендер: команда {command:?}");
         match command {
             RenderCommand::SurfaceCreated {
                 instance,
@@ -111,7 +112,7 @@ impl Renderer {
                 // Surface уничтожается здесь — до ответа главному потоку
                 self.target = None;
                 reply.send(());
-                log::info!("Рендер: surface отпущен");
+                tracing::info!("Рендер: surface отпущен");
             }
             RenderCommand::Resize(size) => {
                 if let Some(target) = &mut self.target {
@@ -136,7 +137,7 @@ impl Renderer {
             None => {}
             Some(Ok(gpu)) => {
                 let info = gpu.adapter.get_info();
-                log::info!(
+                tracing::info!(
                     "GPU: {} ({:?}, драйвер {})",
                     info.name,
                     info.backend,
@@ -147,7 +148,7 @@ impl Renderer {
                 self.configure();
             }
             Some(Err(error)) => {
-                log::error!("Не удалось инициализировать GPU: {error}");
+                tracing::error!("Не удалось инициализировать GPU: {error}");
                 self.init = None;
             }
         }
@@ -168,7 +169,7 @@ impl Renderer {
             .surface
             .get_default_config(&gpu.adapter, width, height)
         else {
-            log::error!("Surface несовместим с адаптером");
+            tracing::error!("Surface несовместим с адаптером");
             return;
         };
         // Fifo = вертикальная синхронизация: get_current_texture ждёт свободный кадр
@@ -178,7 +179,7 @@ impl Renderer {
         target.surface.configure(&gpu.device, &config);
         // Рендер (снова) готов рисовать: пропуски за время простоя не считаем
         self.snapshots.resync();
-        log::info!("Surface: {width}x{height}, {:?}", config.format);
+        tracing::info!("Surface: {width}x{height}, {:?}", config.format);
         target.config = Some(config);
     }
 
@@ -187,6 +188,7 @@ impl Renderer {
         if !self.can_render() {
             return false;
         }
+        let _zone = tracing::trace_span!("render_frame").entered();
         self.snapshots.take();
         self.stats
             .snapshots_skipped
@@ -198,25 +200,30 @@ impl Renderer {
             return false;
         };
         let acquire_started = Instant::now();
-        let acquired = target.surface.get_current_texture();
+        let acquired = {
+            // Здесь поток ждёт свободный кадр экрана (vsync) — в профайлере это видно отдельно
+            let _zone = tracing::trace_span!("acquire_frame").entered();
+            target.surface.get_current_texture()
+        };
         let waited = acquire_started.elapsed();
+        let work_started = Instant::now();
         if waited.as_millis() > 100 {
-            log::debug!("Рендер: ожидание кадра экрана {waited:?}");
+            tracing::debug!("Рендер: ожидание кадра экрана {waited:?}");
         }
         let frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                log::debug!("Рендер: кадр экрана недоступен (окно скрыто или таймаут)");
+                tracing::debug!("Рендер: кадр экрана недоступен (окно скрыто или таймаут)");
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                log::warn!("Surface устарел, перенастраиваем");
+                tracing::warn!("Surface устарел, перенастраиваем");
                 self.configure();
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                log::error!("Ошибка валидации при получении кадра");
+                tracing::error!("Ошибка валидации при получении кадра");
                 return false;
             }
         };
@@ -250,9 +257,15 @@ impl Renderer {
                 ..Default::default()
             });
         }
-        gpu.queue.submit([encoder.finish()]);
-        gpu.queue.present(frame);
+        {
+            let _zone = tracing::trace_span!("submit_present").entered();
+            gpu.queue.submit([encoder.finish()]);
+            gpu.queue.present(frame);
+        }
+        let work = u64::try_from(work_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.stats.frame_cpu_nanos.store(work, Ordering::Relaxed);
         self.stats.frames_rendered.fetch_add(1, Ordering::Relaxed);
+        engine_platform::profiling::render_frame_mark();
         true
     }
 }

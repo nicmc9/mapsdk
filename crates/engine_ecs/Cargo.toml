@@ -9,6 +9,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Зона профайлера на каждую систему ECS
+trace = ["bevy_ecs/trace"]
+
 [dependencies]
 bevy_ecs = { workspace = true }
 

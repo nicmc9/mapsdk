@@ -1,6 +1,6 @@
 [package]
 name = "engine_platform"
-description = "Окно, цикл событий ОС и жизненный цикл приложения"
+description = "Окно, цикл событий ОС, жизненный цикл, логи и профилирование"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,21 +9,36 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Профилирование: на native — Tracy (нужен Tracy GUI), на Web — вкладка Performance браузера.
+# [Rust] Фича Cargo — аналог опции CMake: `cargo run --features engine/profiling`.
+# `dep:` включает опциональную зависимость только вместе с фичей.
+profiling = ["dep:tracing-tracy", "dep:tracy-client"]
+
 [dependencies]
 winit = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 web-time = { workspace = true }
 raw-window-handle = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # [Rust] Зависимости только для конкретной платформы — аналог if(ANDROID) в CMake.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
-android_logger = { workspace = true }
+tracing-logcat = { workspace = true }
+
+# Только реальное устройство: в симуляторе логи идут в терминал через stderr
+[target.'cfg(all(target_os = "ios", not(target_abi = "sim")))'.dependencies]
+tracing-oslog = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-console_log = { workspace = true }
+tracing-web = { workspace = true }
 console_error_panic_hook = { workspace = true }
+js-sys = { workspace = true }
 
-[target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
-env_logger = { workspace = true }
+# Tracy — C++-библиотека, на Web её нет
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-tracy = { workspace = true, optional = true }
+tracy-client = { workspace = true, optional = true }

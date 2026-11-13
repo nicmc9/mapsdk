@@ -23,6 +23,26 @@ Android: Android SDK (build-tools, platform 34) и NDK. По умолчанию 
 | iOS-симулятор | `./platforms/ios/run_sim.sh` | терминал |
 | Web | `./platforms/web/build.sh --serve` → http://localhost:8000 | консоль браузера |
 
+### Настройки (CVar)
+
+Значения по умолчанию — `apps/sandbox/sandbox.toml`. Переопределить при запуске:
+
+```sh
+cargo run -p sandbox -- --cvar sim.hz=30 --cvar render.mode=inline --cvar log.filter=info,engine_render=debug
+```
+
+На Web — параметрами URL: `http://localhost:8000/?sim.hz=30&render.mode=inline`.
+
+### Профилирование
+
+```sh
+cargo run -p sandbox --features engine/profiling
+```
+
+Затем запустите [Tracy](https://github.com/wolfpld/tracy) **версии 0.14.x** и нажмите Connect.
+Версия GUI должна совпадать с клиентом внутри `tracy-client` 0.19 (Tracy 0.14.1), иначе
+подключение не установится. Homebrew может отдавать другую версию — проверьте `brew info tracy`. Пока Tracy не подключён, данные не собираются.
+
 Web требует браузер с WebGPU (решение D3: без WebGL2).
 iOS на устройстве требует подписи сертификатом — будет через Xcode-проект позже.
 

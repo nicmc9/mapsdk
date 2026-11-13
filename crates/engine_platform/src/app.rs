@@ -83,7 +83,7 @@ impl<H: PlatformHandler> PlatformApp<H> {
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: PlatformError) {
-        log::error!("{error}");
+        tracing::error!("{error}");
         self.error.get_or_insert(error);
         event_loop.exit();
     }
@@ -91,7 +91,7 @@ impl<H: PlatformHandler> PlatformApp<H> {
 
 impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        log::info!("Жизненный цикл: resumed");
+        tracing::info!("Жизненный цикл: resumed");
         if self.window.is_none() {
             match self.create_window(event_loop) {
                 Ok(window) => self.window = Some(window),
@@ -110,7 +110,7 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        log::info!("Жизненный цикл: suspended");
+        tracing::info!("Жизненный цикл: suspended");
         self.suspended = true;
         self.handler.suspended();
     }
@@ -163,7 +163,7 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        log::info!("Жизненный цикл: exiting");
+        tracing::info!("Жизненный цикл: exiting");
         self.handler.exiting();
     }
 }

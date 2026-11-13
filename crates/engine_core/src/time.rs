@@ -9,6 +9,8 @@ pub struct Time {
     delta: Duration,
     elapsed: Duration,
     frame: u64,
+    /// Сколько процессорного времени занял прошлый кадр главного цикла.
+    frame_work: Duration,
 }
 
 impl Time {
@@ -19,6 +21,7 @@ impl Time {
             delta: Duration::ZERO,
             elapsed: Duration::ZERO,
             frame: 0,
+            frame_work: Duration::ZERO,
         }
     }
 
@@ -53,6 +56,15 @@ impl Time {
     /// Время с запуска.
     pub fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+
+    /// Время работы прошлого кадра главного цикла (без ожидания следующего шага).
+    pub fn cpu_time(&self) -> Duration {
+        self.frame_work
+    }
+
+    pub(crate) fn set_cpu_time(&mut self, cpu_time: Duration) {
+        self.frame_work = cpu_time;
     }
 
     /// Номер кадра, начиная с 1.
@@ -104,6 +116,12 @@ impl FixedTime {
         }
     }
 
+    /// Меняет шаг и ограничение. Накопленное время сохраняется.
+    pub(crate) fn configure(&mut self, step: Duration, max_steps_per_frame: u32) {
+        self.step = step;
+        self.max_steps_per_frame = max_steps_per_frame;
+    }
+
     /// Добавить реальное время кадра. Возвращает, сколько шагов логики выполнить.
     pub(crate) fn accumulate(&mut self, real_delta: Duration) -> u32 {
         self.accumulator += real_delta;
@@ -116,7 +134,7 @@ impl FixedTime {
             let excess = self.accumulator.saturating_sub(keep);
             self.dropped += excess;
             self.accumulator = keep;
-            log::warn!("Логика не успевает: отброшено {excess:?}");
+            tracing::warn!("Логика не успевает: отброшено {excess:?}");
             return self.max_steps_per_frame;
         }
         steps

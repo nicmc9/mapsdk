@@ -2,7 +2,6 @@
 
 use engine::platform::{LaunchContext, PlatformConfig, PlatformError};
 use engine::prelude::*;
-use engine::render::RenderMode;
 
 /// Общий запуск для всех платформ.
 pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
@@ -11,21 +10,12 @@ pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
         ..PlatformConfig::default() // [Rust] остальные поля — из значения по умолчанию
     };
     App::new()
-        .add_plugin(RenderPlugin {
-            mode: render_mode(),
-        })
+        // Файл встроен в бинарник: так он доступен на всех платформах. Чтение с диска
+        // и из сети появится вместе с VFS (задача A-01).
+        .load_config_toml(include_str!("../sandbox.toml"))
+        .add_plugin(RenderPlugin)
         .add_plugin(SandboxPlugin)
         .run(config, launch)
-}
-
-/// Режим рендера. На desktop можно переключить: `RENDER_MODE=inline cargo run -p sandbox`.
-/// Временно, пока нет конфигурации через `CVar` (задача K-01).
-fn render_mode() -> RenderMode {
-    match std::env::var("RENDER_MODE").as_deref() {
-        Ok("inline") => RenderMode::Inline,
-        Ok("threaded") => RenderMode::Threaded,
-        _ => RenderMode::default(),
-    }
 }
 
 /// Демонстрация ядра и рендера: объекты вращаются на фиксированном шаге, цвет фона
@@ -113,11 +103,13 @@ fn report_stats(
         return;
     }
     let angles: Vec<f32> = query.iter().map(|spin| spin.angle).collect();
-    log::info!(
-        "кадров логики: {}, шагов: {}, кадров рендера: {}, пропущено снимков: {}, окно: {}x{}, углы: {angles:.2?}",
+    engine::log::info!(
+        "кадров логики: {} ({:.2} мс), шагов: {}, кадров рендера: {} ({:.2} мс), пропущено снимков: {}, окно: {}x{}, углы: {angles:.2?}",
         stats.frames,
+        time.cpu_time().as_secs_f64() * 1000.0,
         fixed.steps_total() - stats.last_report_steps,
         render.frames_rendered - stats.last_report_rendered,
+        render.frame_cpu_time.as_secs_f64() * 1000.0,
         render.snapshots_skipped,
         window.size.width,
         window.size.height,
@@ -130,7 +122,7 @@ fn report_stats(
 
 fn log_lifecycle(mut events: MessageReader<AppLifecycle>) {
     for event in events.read() {
-        log::info!("Событие приложения: {event:?}");
+        engine::log::info!("Событие приложения: {event:?}");
     }
 }
 
@@ -143,7 +135,7 @@ fn log_lifecycle(mut events: MessageReader<AppLifecycle>) {
 #[unsafe(no_mangle)]
 fn android_main(app: engine::platform::AndroidApp) {
     if let Err(error) = run(LaunchContext::android(app)) {
-        log::error!("Приложение завершилось с ошибкой: {error}");
+        engine::log::error!("Приложение завершилось с ошибкой: {error}");
     }
 }
 
@@ -152,6 +144,6 @@ fn android_main(app: engine::platform::AndroidApp) {
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn web_start() {
     if let Err(error) = run(LaunchContext::default()) {
-        log::error!("Приложение завершилось с ошибкой: {error}");
+        engine::log::error!("Приложение завершилось с ошибкой: {error}");
     }
 }
