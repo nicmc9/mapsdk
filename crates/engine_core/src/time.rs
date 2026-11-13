@@ -130,6 +130,7 @@ impl FixedTime {
     }
 
     /// Сколько осталось до следующего шага.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn until_next_step(&self) -> Duration {
         self.step.saturating_sub(self.accumulator)
     }

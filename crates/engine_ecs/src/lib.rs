@@ -6,37 +6,20 @@
 pub mod prelude {
     //! Всё необходимое для систем и компонентов: `use engine::ecs::prelude::*;`
 
-    pub use bevy_ecs::prelude::{
-        // Фильтры запросов
-        Added,
-        // Сущности, компоненты, ресурсы
-        Bundle,
-        Changed,
-        // Иерархия
-        ChildOf,
-        Children,
-        // Системы и их параметры
-        Commands,
-        Component,
-        Entity,
-        // Порядок выполнения систем
-        IntoScheduleConfigs,
-        Local,
-        // Сообщения между системами (двойная буферизация, живут 2 кадра)
-        Message,
-        MessageReader,
-        MessageWriter,
-        Or,
-        Query,
-        Res,
-        ResMut,
-        Resource,
-        Single,
-        SystemSet,
-        With,
-        Without,
-        World,
-    };
+    // Сущности, компоненты, ресурсы
+    pub use bevy_ecs::prelude::{Bundle, Component, Entity, Resource, World};
+    // Параметры систем
+    pub use bevy_ecs::prelude::{Commands, Local, Query, Res, ResMut, Single};
+    // Ресурсы, доступные только из главного потока (объекты ОС, wgpu на Web)
+    pub use bevy_ecs::prelude::{NonSend, NonSendMut};
+    // Фильтры запросов
+    pub use bevy_ecs::prelude::{Added, Changed, Or, With, Without};
+    // Иерархия
+    pub use bevy_ecs::prelude::{ChildOf, Children};
+    // Сообщения между системами (двойная буферизация, живут 2 кадра)
+    pub use bevy_ecs::prelude::{Message, MessageReader, MessageWriter};
+    // Порядок выполнения систем
+    pub use bevy_ecs::prelude::{IntoScheduleConfigs, SystemSet};
 
     // [Rust] Обход ограничения derive-макросов bevy_ecs. `#[derive(Component)]` генерирует
     // код с путём `bevy_ecs::...` и ищет крейт `bevy_ecs` в Cargo.toml проекта. Проект

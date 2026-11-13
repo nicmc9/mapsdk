@@ -20,12 +20,17 @@ engine_platform = { path = "crates/engine_platform" }
 engine_math = { path = "crates/engine_math" }
 engine_ecs = { path = "crates/engine_ecs" }
 engine_core = { path = "crates/engine_core" }
+engine_render = { path = "crates/engine_render" }
 
 # Сторонние (описание каждого — docs/crates.md)
 winit = "0.30.13"
 glam = "0.34.3"
 web-time = "1.1.0"
 raw-window-handle = "0.6.2"
+crossbeam-channel = "0.5.17"
+triple_buffer = "9.0.1"
+# Без dx12 (Windows не целевая платформа) и webgl (решение D3: на Web только WebGPU)
+wgpu = { version = "30.0.2", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "gles", "wgsl", "webgpu"] }
 # Без bevy_reflect (рефлексия понадобится к редактору) и backtrace — меньше время сборки
 bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "async_executor"] }
 log = "0.4.35"

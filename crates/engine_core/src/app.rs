@@ -5,7 +5,7 @@ use engine_ecs::{Schedule, ScheduleSystem, Schedules};
 use engine_platform::{Instant, LaunchContext, PlatformConfig, PlatformError};
 
 use crate::window::MainWindow;
-use crate::{AppLifecycle, FixedTime, Plugin, Stage, Time, Window, WindowResized};
+use crate::{AppLifecycle, FixedTime, LifecycleHook, Plugin, Stage, Time, Window, WindowResized};
 
 /// Приложение движка: мир ECS, расписания стадий и подключённые плагины.
 ///
@@ -23,11 +23,18 @@ pub struct App {
     // Аналог `std::unique_ptr<IPlugin>` с виртуальными вызовами.
     plugins: Vec<Box<dyn Plugin>>,
     plugin_names: HashSet<&'static str>,
+    lifecycle_hooks: Vec<LifecycleHookFn>,
     started: bool,
 }
 
+// [Rust] `dyn FnMut(...)` — любая функция или замыкание с такой сигнатурой, которое может
+// менять захваченные переменные. Аналог `std::function<void(World&, const LifecycleHook&)>`.
+type LifecycleHookFn = Box<dyn FnMut(&mut World, &LifecycleHook<'_>)>;
+
 impl App {
     pub fn new() -> Self {
+        // Логи нужны уже при сборке плагинов, до запуска цикла платформы
+        engine_platform::init_logging();
         let mut world = World::new();
         for stage in Stage::ALL {
             world.add_schedule(Schedule::new(stage));
@@ -40,6 +47,7 @@ impl App {
             world,
             plugins: Vec::new(),
             plugin_names: HashSet::new(),
+            lifecycle_hooks: Vec::new(),
             started: false,
         };
         app.add_systems(Stage::First, engine_ecs::message_update_system);
@@ -85,6 +93,24 @@ impl App {
     pub fn add_message<M: Message>(&mut self) -> &mut Self {
         engine_ecs::register_message::<M>(&mut self.world);
         self
+    }
+
+    /// Регистрирует синхронный обработчик событий платформы (см. [`LifecycleHook`]).
+    /// Хуки вызываются в порядке регистрации.
+    pub fn add_lifecycle_hook(
+        &mut self,
+        hook: impl FnMut(&mut World, &LifecycleHook<'_>) + 'static,
+    ) -> &mut Self {
+        self.lifecycle_hooks.push(Box::new(hook));
+        self
+    }
+
+    pub(crate) fn run_lifecycle_hooks(&mut self, event: &LifecycleHook<'_>) {
+        // [Rust] Поля `lifecycle_hooks` и `world` заимствуются одновременно: одно для чтения
+        // хуков, другое на изменение. Это разрешено, потому что поля разные.
+        for hook in &mut self.lifecycle_hooks {
+            hook(&mut self.world, event);
+        }
     }
 
     pub fn insert_resource<R: Resource>(&mut self, resource: R) -> &mut Self {
@@ -137,6 +163,7 @@ impl App {
 
     /// Когда нужен следующий кадр: к моменту очередного шага логики.
     /// `now` — время, с которым выполнялся последний кадр.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] // на Web кадры идут от экрана
     pub(crate) fn next_update_time(&self, now: Instant) -> Instant {
         now + self.world.resource::<FixedTime>().until_next_step()
     }
@@ -180,6 +207,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("plugins", &self.plugin_names)
+            .field("lifecycle_hooks", &self.lifecycle_hooks.len())
             .field("started", &self.started)
             .finish_non_exhaustive()
     }

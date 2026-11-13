@@ -2,6 +2,7 @@
 
 use engine::platform::{LaunchContext, PlatformConfig, PlatformError};
 use engine::prelude::*;
+use engine::render::RenderMode;
 
 /// Общий запуск для всех платформ.
 pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
@@ -9,18 +10,33 @@ pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
         title: "Sandbox".to_owned(),
         ..PlatformConfig::default() // [Rust] остальные поля — из значения по умолчанию
     };
-    App::new().add_plugin(SandboxPlugin).run(config, launch)
+    App::new()
+        .add_plugin(RenderPlugin {
+            mode: render_mode(),
+        })
+        .add_plugin(SandboxPlugin)
+        .run(config, launch)
 }
 
-/// Демонстрация ядра: объекты вращаются на фиксированном шаге,
-/// раз в секунду в лог пишется статистика кадров.
+/// Режим рендера. На desktop можно переключить: `RENDER_MODE=inline cargo run -p sandbox`.
+/// Временно, пока нет конфигурации через `CVar` (задача K-01).
+fn render_mode() -> RenderMode {
+    match std::env::var("RENDER_MODE").as_deref() {
+        Ok("inline") => RenderMode::Inline,
+        Ok("threaded") => RenderMode::Threaded,
+        _ => RenderMode::default(),
+    }
+}
+
+/// Демонстрация ядра и рендера: объекты вращаются на фиксированном шаге, цвет фона
+/// следует за первым объектом. Раз в секунду в лог пишется статистика кадров.
 struct SandboxPlugin;
 
 impl Plugin for SandboxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FrameStats>()
             .add_systems(Stage::Startup, spawn_objects)
-            .add_systems(Stage::FixedUpdate, rotate)
+            .add_systems(Stage::FixedUpdate, (rotate, tint_background.after(rotate)))
             .add_systems(Stage::Update, (report_stats, log_lifecycle));
     }
 }
@@ -32,21 +48,33 @@ struct Spin {
     speed: f32,
 }
 
+/// Метка: по этому объекту окрашивается фон.
+// [Rust] Компонент без полей (zero-sized type) не занимает памяти — это просто тег,
+// по которому Query находит нужные сущности.
+#[derive(Component)]
+struct TintsBackground;
+
 #[derive(Resource, Default)]
 struct FrameStats {
     frames: u32,
     last_report_steps: u64,
+    last_report_rendered: u64,
     next_report_secs: f32,
 }
 
 // [Rust] Система — обычная функция. Её параметры (`Commands`, `Query`, `Res`) bevy_ecs
 // заполняет сам, а по их типам понимает, какие системы можно выполнять параллельно.
 fn spawn_objects(mut commands: Commands) {
-    for i in 0..3u8 {
-        commands.spawn(Spin {
+    // [Rust] Кортеж компонентов — сущность получает их все сразу
+    commands.spawn((
+        Spin {
             angle: 0.0,
-            speed: f32::from(i + 1),
-        });
+            speed: 1.0,
+        },
+        TintsBackground,
+    ));
+    for speed in [2.0, 3.0] {
+        commands.spawn(Spin { angle: 0.0, speed });
     }
 }
 
@@ -58,10 +86,24 @@ fn rotate(fixed: Res<FixedTime>, mut query: Query<&mut Spin>) {
     }
 }
 
+/// Цвет фона — оттенок по углу первого объекта: полный круг цветов за 2π/скорость секунд.
+fn tint_background(
+    query: Query<&Spin, With<TintsBackground>>,
+    mut clear_color: ResMut<ClearColor>,
+) {
+    // [Rust] `single()` — ровно одна подходящая сущность, иначе Err
+    if let Ok(spin) = query.single() {
+        let hue = spin.angle / std::f32::consts::TAU;
+        // Приглушаем цвет: смешиваем с чёрным
+        clear_color.0 = Color::hue(hue).lerp(Color::BLACK, 0.5);
+    }
+}
+
 fn report_stats(
     time: Res<Time>,
     fixed: Res<FixedTime>,
     window: Res<Window>,
+    render: Res<RenderStats>,
     mut stats: ResMut<FrameStats>,
     query: Query<&Spin>,
 ) {
@@ -72,14 +114,17 @@ fn report_stats(
     }
     let angles: Vec<f32> = query.iter().map(|spin| spin.angle).collect();
     log::info!(
-        "кадров: {}, шагов логики: {}, окно: {}x{}, углы: {angles:.2?}",
+        "кадров логики: {}, шагов: {}, кадров рендера: {}, пропущено снимков: {}, окно: {}x{}, углы: {angles:.2?}",
         stats.frames,
         fixed.steps_total() - stats.last_report_steps,
+        render.frames_rendered - stats.last_report_rendered,
+        render.snapshots_skipped,
         window.size.width,
         window.size.height,
     );
     stats.frames = 0;
     stats.last_report_steps = fixed.steps_total();
+    stats.last_report_rendered = render.frames_rendered;
     stats.next_report_secs = now + 1.0;
 }
 

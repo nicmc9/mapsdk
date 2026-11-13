@@ -17,6 +17,8 @@ pub(crate) struct PlatformApp<H: PlatformHandler> {
     handler: H,
     window: Option<PlatformWindow>,
     suspended: bool,
+    /// Кадры идут от событий перерисовки экрана, а не от таймера.
+    display_driven: bool,
     error: Option<PlatformError>,
 }
 
@@ -27,6 +29,7 @@ impl<H: PlatformHandler> PlatformApp<H> {
             handler,
             window: None,
             suspended: true,
+            display_driven: false,
             error: None,
         }
     }
@@ -58,6 +61,27 @@ impl<H: PlatformHandler> PlatformApp<H> {
         Ok(PlatformWindow::new(event_loop.create_window(attributes)?))
     }
 
+    /// Выполняет кадр и настраивает, когда проснуться в следующий раз.
+    fn run_update(&mut self, event_loop: &ActiveEventLoop) {
+        let control_flow = match self.handler.update() {
+            NextUpdate::Immediately => ControlFlow::Poll,
+            NextUpdate::At(instant) => ControlFlow::WaitUntil(instant),
+            NextUpdate::WaitForEvents => ControlFlow::Wait,
+            NextUpdate::NextDisplayFrame => {
+                self.display_driven = true;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                ControlFlow::Wait
+            }
+            NextUpdate::Exit => {
+                event_loop.exit();
+                return;
+            }
+        };
+        event_loop.set_control_flow(control_flow);
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: PlatformError) {
         log::error!("{error}");
         self.error.get_or_insert(error);
@@ -78,6 +102,10 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
         // [Rust] `if let Some(x) = opt` — выполнить блок, только если значение есть.
         if let Some(window) = &self.window {
             self.handler.resumed(window);
+            if self.display_driven {
+                // После фона цепочка перерисовок прервана — запускаем заново
+                window.request_redraw();
+            }
         }
     }
 
@@ -107,6 +135,9 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
                     scale,
                 );
             }
+            WindowEvent::RedrawRequested if self.display_driven && !self.suspended => {
+                self.run_update(event_loop);
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(window) = &self.window {
                     self.handler.resized(window.size(), scale_factor);
@@ -123,16 +154,12 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         }
-        let control_flow = match self.handler.update() {
-            NextUpdate::Immediately => ControlFlow::Poll,
-            NextUpdate::At(instant) => ControlFlow::WaitUntil(instant),
-            NextUpdate::WaitForEvents => ControlFlow::Wait,
-            NextUpdate::Exit => {
-                event_loop.exit();
-                return;
-            }
-        };
-        event_loop.set_control_flow(control_flow);
+        if self.display_driven {
+            // Кадры идут от RedrawRequested, здесь ничего не делаем
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        self.run_update(event_loop);
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {

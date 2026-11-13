@@ -28,3 +28,16 @@ pub enum AppLifecycle {
 /// Появляется в мире после первого `resumed`.
 #[derive(Resource, Debug, Clone)]
 pub struct MainWindow(pub engine_platform::PlatformWindow);
+
+/// Синхронное событие платформы для плагинов, которым нельзя ждать следующего кадра.
+///
+/// В отличие от сообщения [`AppLifecycle`], хук вызывается сразу, внутри обработчика ОС.
+/// Пример: на Android после `Suspended` окно уничтожается немедленно, и рендер должен
+/// отпустить surface до возврата из хука.
+#[derive(Debug, Clone, Copy)]
+pub enum LifecycleHook<'a> {
+    Resumed(&'a engine_platform::PlatformWindow),
+    Suspended,
+    Resized { size: WindowSize, scale_factor: f64 },
+    Exiting,
+}

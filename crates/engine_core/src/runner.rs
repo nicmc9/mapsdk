@@ -1,14 +1,15 @@
 use engine_platform::{Instant, NextUpdate, PlatformHandler, PlatformWindow, WindowSize};
 
 use crate::window::MainWindow;
-use crate::{App, AppLifecycle, Time, Window, WindowResized};
+use crate::{App, AppLifecycle, LifecycleHook, Time, Window, WindowResized};
 
 /// Связывает цикл событий платформы с [`App`]: события ОС превращаются в ресурсы
 /// и сообщения ECS, а кадры выполняются с темпом фиксированного шага.
 #[derive(Debug)]
 pub(crate) struct AppRunner {
     app: App,
-    /// Когда выполнять следующий кадр. `None` — сразу.
+    /// Когда выполнять следующий кадр. `None` — сразу. На Web не используется.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     next_frame: Option<Instant>,
 }
 
@@ -36,16 +37,30 @@ impl PlatformHandler for AppRunner {
         self.app.set_main_window(MainWindow(window.clone()));
         self.set_window_state(window.size(), window.scale_factor());
         self.app.world_mut().write_message(AppLifecycle::Resumed);
+        self.app
+            .run_lifecycle_hooks(&LifecycleHook::Resumed(window));
     }
 
     fn suspended(&mut self) {
         self.app.world_mut().write_message(AppLifecycle::Suspended);
+        self.app.run_lifecycle_hooks(&LifecycleHook::Suspended);
     }
 
     fn resized(&mut self, size: WindowSize, scale_factor: f64) {
         self.set_window_state(size, scale_factor);
+        self.app
+            .run_lifecycle_hooks(&LifecycleHook::Resized { size, scale_factor });
     }
 
+    /// На Web кадр выполняется на каждое обновление экрана: рендер там работает в главном
+    /// потоке, и так он рисует с частотой экрана, а логика копит шаги как обычно.
+    #[cfg(target_arch = "wasm32")]
+    fn update(&mut self) -> NextUpdate {
+        self.app.update_at(Instant::now());
+        NextUpdate::NextDisplayFrame
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn update(&mut self) -> NextUpdate {
         // Цикл ОС просыпается не только по нашему таймеру, но и на каждое событие
         // (движение мыши, перерисовка). Кадр выполняем только когда подошло время,
@@ -64,5 +79,6 @@ impl PlatformHandler for AppRunner {
 
     fn exiting(&mut self) {
         log::info!("Остановка приложения");
+        self.app.run_lifecycle_hooks(&LifecycleHook::Exiting);
     }
 }
