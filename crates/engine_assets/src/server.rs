@@ -33,6 +33,8 @@ struct Inner {
     drops: (Sender<UntypedAssetId>, Receiver<UntypedAssetId>),
     net: RwLock<Option<Net>>,
     root: RwLock<String>,
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+    watcher: Mutex<Option<crate::watch::Watcher>>,
 }
 
 #[derive(Default)]
@@ -113,6 +115,12 @@ impl AssetServer {
                 drops: crossbeam_channel::unbounded(),
                 net: RwLock::default(),
                 root: RwLock::new(String::new()),
+                #[cfg(not(any(
+                    target_arch = "wasm32",
+                    target_os = "android",
+                    target_os = "ios"
+                )))]
+                watcher: Mutex::default(),
             }),
         }
     }
@@ -253,6 +261,32 @@ impl AssetServer {
             .root
             .write()
             .unwrap_or_else(PoisonError::into_inner) = root;
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+    pub(crate) fn start_watching(&self, root: &std::path::Path) {
+        *self
+            .inner
+            .watcher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = crate::watch::Watcher::start(root);
+    }
+
+    /// Перезагружает все ресурсы этого файла в те же хэндлы. Старое значение остаётся
+    /// видимым, пока не придёт новое, — без мигания заглушкой.
+    pub fn reload(&self, file: &str) {
+        let path = AssetPath::new(file);
+        let targets: Vec<(UntypedAssetId, TypeId)> = self
+            .lock()
+            .infos
+            .iter()
+            .filter(|(_, info)| info.path.as_ref() == Some(&path))
+            .map(|(id, _)| (*id, id.type_id))
+            .collect();
+        for (id, type_id) in targets {
+            tracing::info!("Перезагрузка: {path}");
+            self.spawn_load(id, path.clone(), Some(type_id));
+        }
     }
 
     fn strong_ref(&self, id: UntypedAssetId) -> StrongRef {
@@ -581,6 +615,20 @@ impl AssetServer {
 pub(crate) fn apply_loads(world: &mut World) {
     let _zone = tracing::trace_span!("apply_loads").entered();
     let server = world.resource::<AssetServer>().clone();
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+    {
+        let changes = server
+            .inner
+            .watcher
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(crate::watch::Watcher::changes)
+            .unwrap_or_default();
+        for file in changes {
+            server.reload(&file);
+        }
+    }
     // Ограничение на кадр: применение результата может быть дорогим (вставка больших данных)
     for _ in 0..256 {
         let Ok(result) = server.inner.results.1.try_recv() else {

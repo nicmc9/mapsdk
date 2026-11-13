@@ -31,6 +31,7 @@
 | `futures-util` | Комбинаторы future: `Shared` (один результат — много ожидающих), `join` | `std::shared_future` | Дедупликация загрузок |
 | `ureq` 3 | Синхронный HTTP-клиент, TLS через `rustls` | libcurl (easy API) | Без runtime `tokio`, проще `reqwest`. Блокирующий вызов в потоке пула IO. `rustls` тянет `ring` с C-кодом — Android собирается через `cargo ndk` |
 | `wasm-bindgen-futures`, `web-sys` | Промисы JS как Rust-future; `fetch`, `AbortSignal` | — | Сеть на Web |
+| `notify` 8 | Уведомления ОС об изменении файлов (FSEvents, inotify) | efsw / Qt `QFileSystemWatcher` | Горячая перезагрузка ресурсов, только desktop |
 | `image` 0.25 | Декодирование PNG и JPEG | stb_image | Чистый Rust, работает на wasm. Включены только png и jpeg |
 | `gltf` 1.4 | Разбор glTF/glb и чтение вершинных данных | cgltf / tinygltf | Буферы и внешние текстуры читаем сами через VFS — тот же кеш и сеть |
 

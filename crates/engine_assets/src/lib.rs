@@ -23,6 +23,8 @@ mod path;
 mod server;
 mod source;
 mod storage;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+mod watch;
 
 pub mod formats;
 
@@ -62,6 +64,13 @@ pub static ASSETS_ROOT: CVar<CVarString> = CVar::new(
 )
 .with_flags(CVarFlags::STARTUP);
 
+pub static ASSETS_WATCH: CVar<bool> = CVar::new(
+    "assets.watch",
+    true,
+    "Перезагружать изменённые файлы ресурсов (только desktop)",
+)
+.with_flags(CVarFlags::STARTUP);
+
 pub static ASSETS_STRICT: CVar<bool> = CVar::new(
     "assets.strict",
     false,
@@ -81,6 +90,7 @@ impl Plugin for AssetPlugin {
         );
         app.register_cvar(&ASSETS_ROOT)
             .register_cvar(&ASSETS_STRICT)
+            .register_cvar(&ASSETS_WATCH)
             .insert_resource(AssetServer::new())
             .add_systems(Stage::First, server::apply_loads);
         formats::register(app);
@@ -90,9 +100,12 @@ impl Plugin for AssetPlugin {
         // Здесь уже применены CVar (файл, аргументы) и создан клиент сети (NetPlugin::finish
         // вызывается раньше — плагины завершаются в порядке добавления)
         let net = app.world().get_resource::<engine_net::Net>().cloned();
-        app.world()
-            .resource::<AssetServer>()
-            .configure(net, ASSETS_ROOT.get().into_owned());
+        let server = app.world().resource::<AssetServer>();
+        server.configure(net, ASSETS_ROOT.get().into_owned());
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+        if ASSETS_WATCH.get() {
+            server.start_watching(std::path::Path::new(ASSETS_ROOT.get().as_ref()));
+        }
     }
 }
 
