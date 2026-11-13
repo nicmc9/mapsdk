@@ -15,3 +15,11 @@ engine_ecs = { workspace = true }
 engine_math = { workspace = true }
 engine_assets = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+# Бенчмарк: `cargo bench -p engine_scene`. harness = false — свой main у criterion вместо встроенного
+[[bench]]
+name = "transforms"
+harness = false

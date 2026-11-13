@@ -85,6 +85,7 @@ cargo clippy --workspace --lib --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
 cargo test -p engine_net -- --ignored   # реальная сеть
 cargo test -p engine_render --test golden   # сравнение картинок (без GPU — пропуск)
+cargo bench -p engine_math -p engine_core -p engine_scene   # бенчмарки (release)
 ```
 
 Под Linux локально на Mac не проверить: `ring` (TLS) содержит C-код, нужен компилятор

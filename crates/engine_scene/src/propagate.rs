@@ -2,8 +2,9 @@ use engine_ecs::prelude::*;
 
 use crate::{GlobalTransform, Transform, Visibility};
 
+/// Мировые матрицы: от корней иерархии к листьям. Публичная — для бенчмарков и тестов.
 /// Мировые матрицы: от корней иерархии к листьям. Скрытый родитель скрывает потомков.
-pub(crate) fn propagate_transforms(
+pub fn propagate_transforms(
     mut roots: Query<
         (Entity, &Transform, &mut GlobalTransform, Option<&Children>),
         Without<ChildOf>,

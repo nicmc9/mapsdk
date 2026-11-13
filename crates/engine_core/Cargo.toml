@@ -22,3 +22,11 @@ bevy_tasks = { workspace = true }
 # Пулы потоков задач — только там, где есть потоки
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy_tasks = { workspace = true, features = ["multi_threaded"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+# Бенчмарк: `cargo bench -p engine_core`. harness = false — свой main у criterion вместо встроенного
+[[bench]]
+name = "sync_ecs"
+harness = false

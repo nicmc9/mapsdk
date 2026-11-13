@@ -18,7 +18,7 @@ pub use components::{
     Visibility,
 };
 pub use gltf_scene::{SceneRoot, SceneSpawned, SkinnedMesh};
-pub use propagate::is_visible;
+pub use propagate::{is_visible, propagate_transforms};
 
 /// Подключает сцену. Требует `AssetPlugin` (для glTF).
 #[derive(Debug, Default)]
