@@ -64,6 +64,13 @@ pub static ASSETS_ROOT: CVar<CVarString> = CVar::new(
 )
 .with_flags(CVarFlags::STARTUP);
 
+pub static ASSETS_ENGINE_DIR: CVar<CVarString> = CVar::new(
+    "assets.engine_dir",
+    std::borrow::Cow::Borrowed(""),
+    "Папка вместо встроенных файлов `engine://` (разработка: правки шейдеров движка на лету)",
+)
+.with_flags(CVarFlags::STARTUP);
+
 pub static ASSETS_WATCH: CVar<bool> = CVar::new(
     "assets.watch",
     true,
@@ -91,6 +98,7 @@ impl Plugin for AssetPlugin {
         app.register_cvar(&ASSETS_ROOT)
             .register_cvar(&ASSETS_STRICT)
             .register_cvar(&ASSETS_WATCH)
+            .register_cvar(&ASSETS_ENGINE_DIR)
             .insert_resource(AssetServer::new())
             .add_systems(Stage::First, server::apply_loads);
         formats::register(app);
@@ -102,9 +110,16 @@ impl Plugin for AssetPlugin {
         let net = app.world().get_resource::<engine_net::Net>().cloned();
         let server = app.world().resource::<AssetServer>();
         server.configure(net, ASSETS_ROOT.get().into_owned());
+        let engine_dir = ASSETS_ENGINE_DIR.get();
+        if !engine_dir.is_empty() {
+            server.set_engine_dir(std::path::PathBuf::from(engine_dir.as_ref()));
+        }
         #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
         if ASSETS_WATCH.get() {
-            server.start_watching(std::path::Path::new(ASSETS_ROOT.get().as_ref()));
+            server.start_watching(std::path::Path::new(ASSETS_ROOT.get().as_ref()), "");
+            if !engine_dir.is_empty() {
+                server.start_watching(std::path::Path::new(engine_dir.as_ref()), "engine://");
+            }
         }
     }
 }

@@ -1,21 +1,7 @@
 // PBR (metallic-roughness, как в glTF): BRDF Кука–Торранса с GGX.
 // Группы привязок: 0 — кадр (камера, свет), 1 — материал, 2 — объект (смещение в буфере).
 
-struct PointLight {
-    position_range: vec4<f32>,   // xyz — позиция, w — радиус действия
-    color: vec4<f32>,            // rgb — цвет × интенсивность
-};
-
-struct Frame {
-    view_proj: mat4x4<f32>,
-    camera_position: vec4<f32>,
-    ambient: vec4<f32>,           // rgb — цвет × интенсивность
-    sun_direction: vec4<f32>,     // xyz — куда светит солнце, w = 1 — солнце есть
-    sun_color: vec4<f32>,
-    // x — число точечных источников, y = 1 — кодировать sRGB вручную (Web)
-    counts: vec4<u32>,
-    points: array<PointLight, 8>,
-};
+#include "common.wgsl"
 
 struct Material {
     base_color: vec4<f32>,
@@ -29,7 +15,6 @@ struct Object {
     normal_matrix: mat4x4<f32>,   // обратная транспонированная: верна и при неравномерном масштабе
 };
 
-@group(0) @binding(0) var<uniform> frame: Frame;
 
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var base_color_texture: texture_2d<f32>;
@@ -152,11 +137,6 @@ fn tonemap_aces(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let low = c * 12.92;
-    let high = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, c <= vec3<f32>(0.0031308));
-}
 
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {

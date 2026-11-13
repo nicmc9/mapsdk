@@ -34,7 +34,11 @@ struct Inner {
     net: RwLock<Option<Net>>,
     root: RwLock<String>,
     #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
-    watcher: Mutex<Option<crate::watch::Watcher>>,
+    watchers: Mutex<Vec<crate::watch::Watcher>>,
+    /// Встроенные в бинарник файлы `engine://...` (шейдеры движка).
+    embedded: RwLock<HashMap<String, &'static [u8]>>,
+    /// Папка вместо встроенных файлов — для правки на лету при разработке.
+    engine_dir: RwLock<Option<std::path::PathBuf>>,
 }
 
 #[derive(Default)]
@@ -120,7 +124,9 @@ impl AssetServer {
                     target_os = "android",
                     target_os = "ios"
                 )))]
-                watcher: Mutex::default(),
+                watchers: Mutex::default(),
+                embedded: RwLock::default(),
+                engine_dir: RwLock::default(),
             }),
         }
     }
@@ -264,12 +270,33 @@ impl AssetServer {
     }
 
     #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
-    pub(crate) fn start_watching(&self, root: &std::path::Path) {
+    pub(crate) fn start_watching(&self, root: &std::path::Path, prefix: &'static str) {
+        if let Some(watcher) = crate::watch::Watcher::start(root, prefix) {
+            self.inner
+                .watchers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(watcher);
+        }
+    }
+
+    /// Регистрирует встроенный файл: `register_embedded("engine://shaders/pbr.wgsl", bytes)`.
+    /// [Rust] `&'static [u8]` — данные, живущие всю программу: результат `include_bytes!`.
+    pub fn register_embedded(&self, path: &str, data: &'static [u8]) {
+        self.inner
+            .embedded
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(path.to_owned(), data);
+    }
+
+    pub(crate) fn set_engine_dir(&self, dir: std::path::PathBuf) {
+        tracing::info!("Файлы движка (engine://) — из папки {}", dir.display());
         *self
             .inner
-            .watcher
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = crate::watch::Watcher::start(root);
+            .engine_dir
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(dir);
     }
 
     /// Перезагружает все ресурсы этого файла в те же хэндлы. Старое значение остаётся
@@ -340,6 +367,9 @@ impl AssetServer {
     }
 
     pub(crate) async fn read(&self, path: &AssetPath) -> Result<Bytes, AssetError> {
+        if let Some(relative) = path.file().strip_prefix("engine://") {
+            return self.read_engine(path.file(), relative);
+        }
         let net = self
             .inner
             .net
@@ -353,6 +383,34 @@ impl AssetServer {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         source::read(path, &root, net.as_ref()).await
+    }
+
+    /// Файл движка: из папки разработки (если задана) или встроенный в бинарник.
+    /// На Web файловой системы нет — только встроенные.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+    fn read_engine(&self, full: &str, relative: &str) -> Result<Bytes, AssetError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = self
+            .inner
+            .engine_dir
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            return std::fs::read(dir.join(relative))
+                .map(Bytes::from)
+                .map_err(|error| AssetError::Io {
+                    path: full.to_owned(),
+                    reason: error.to_string(),
+                });
+        }
+        self.inner
+            .embedded
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(full)
+            .map(|data| Bytes::from(*data))
+            .ok_or_else(|| AssetError::NotFound(full.to_owned()))
     }
 
     /// Вложенный ресурс запрошен до загрузки файла: запускаем загрузку файла
@@ -617,14 +675,14 @@ pub(crate) fn apply_loads(world: &mut World) {
     let server = world.resource::<AssetServer>().clone();
     #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
     {
-        let changes = server
+        let changes: Vec<String> = server
             .inner
-            .watcher
+            .watchers
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(crate::watch::Watcher::changes)
-            .unwrap_or_default();
+            .iter()
+            .flat_map(crate::watch::Watcher::changes)
+            .collect();
         for file in changes {
             server.reload(&file);
         }

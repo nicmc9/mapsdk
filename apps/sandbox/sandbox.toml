@@ -9,5 +9,9 @@ max_steps = 5    # максимум шагов логики за кадр
 [log]
 # filter = "info,engine_render=debug"
 
+[assets]
+# Шейдеры движка из исходников — правка на лету (только desktop, при запуске из корня репозитория)
+# engine_dir = "crates/engine_render/src"
+
 [render]
 # mode = "inline"   # threaded (по умолчанию на native) или inline

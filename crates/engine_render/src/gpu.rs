@@ -49,6 +49,8 @@ impl GpuInit {
                     label: Some("engine"),
                     // Лимиты, которые поддерживает этот адаптер (GLES3 и мобильные GPU слабее desktop)
                     required_limits: adapter.limits(),
+                    // Метки времени для замера проходов — если адаптер умеет
+                    required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                     ..Default::default()
                 })
                 .await

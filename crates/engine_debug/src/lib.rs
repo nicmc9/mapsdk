@@ -114,6 +114,21 @@ fn stats_window(
                     "Примитивы",
                     format!("{} нарисовано, {} отсечено", render.drawn, render.culled),
                 );
+                let gpu = |time: Option<engine_core::Duration>| {
+                    time.map_or_else(|| "—".to_owned(), |t| format!("{:.2} мс", ms(t)))
+                };
+                row(
+                    "GPU",
+                    if render.gpu_scene_time.is_none() && render.gpu_ui_time.is_none() {
+                        "нет данных (метки времени не поддерживаются)".to_owned()
+                    } else {
+                        format!(
+                            "сцена {}, интерфейс {}",
+                            gpu(render.gpu_scene_time),
+                            gpu(render.gpu_ui_time)
+                        )
+                    },
+                );
                 row(
                     "Видеопамять",
                     format!(

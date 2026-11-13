@@ -12,8 +12,16 @@ pub(crate) struct Watcher {
     changes: Receiver<String>,
 }
 
+// Ручной Debug: у наблюдателя notify его нет
+impl std::fmt::Debug for Watcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Watcher")
+    }
+}
+
 impl Watcher {
-    pub fn start(root: &Path) -> Option<Self> {
+    /// `prefix` добавляется к путям: `""` для ресурсов проекта, `"engine://"` для файлов движка.
+    pub fn start(root: &Path, prefix: &'static str) -> Option<Self> {
         use notify::Watcher as _;
         let root = std::fs::canonicalize(root).ok()?;
         let (tx, rx): (Sender<String>, Receiver<String>) = crossbeam_channel::unbounded();
@@ -27,7 +35,7 @@ impl Watcher {
                 }
                 for path in event.paths {
                     if let Some(relative) = relative(&base, &path) {
-                        let _ = tx.send(relative);
+                        let _ = tx.send(format!("{prefix}{relative}"));
                     }
                 }
             })

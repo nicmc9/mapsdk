@@ -15,10 +15,13 @@ mod debug_draw;
 mod extract;
 mod frontend;
 mod gpu;
+mod gpu_timer;
 mod graph;
+mod preprocess;
 mod renderer;
 mod scene;
 mod screenshot;
+mod shaders;
 mod snapshot;
 mod ui;
 

@@ -46,6 +46,15 @@ cargo run -p sandbox -- --cvar sim.hz=30 --cvar render.mode=inline --cvar log.fi
 На Mac с ISO-клавиатурой macOS меняет местами коды клавиш `` ` `` и `§` — проще нажать F4
 (на ноутбуке — с `fn`).
 
+### Правка шейдеров на лету
+
+```sh
+cargo run -p sandbox -- --cvar assets.engine_dir=crates/engine_render/src
+```
+
+Сохраните `crates/engine_render/src/shaders/pbr.wgsl` — картинка обновится без перезапуска.
+Ошибка в шейдере пишется в лог, рендер продолжает работать с прежней версией.
+
 ### Скриншот
 
 ```sh

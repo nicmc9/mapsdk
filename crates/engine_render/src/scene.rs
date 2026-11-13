@@ -158,6 +158,7 @@ pub(crate) struct SceneRenderer {
     /// Порядок отрисовки — индексы в `visible`.
     order: Vec<usize>,
     line_pipeline: wgpu::RenderPipeline,
+    color_format: wgpu::TextureFormat,
     line_buffer: Option<(wgpu::Buffer, u64)>,
     line_count: u32,
 }
@@ -167,6 +168,8 @@ pub(crate) struct FrameTarget<'a> {
     pub color: &'a wgpu::TextureView,
     pub depth: &'a wgpu::TextureView,
     pub size: (u32, u32),
+    /// Метки времени GPU для прохода (если поддерживаются).
+    pub timestamps: Option<wgpu::RenderPassTimestampWrites<'a>>,
 }
 
 /// Матрица «проекция × вид» и позиция камеры. Без камеры — вид издалека на начало координат.
@@ -193,6 +196,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         color_format: wgpu::TextureFormat,
+        sources: &HashMap<String, String>,
     ) -> Self {
         let _zone = tracing::trace_span!("scene_renderer_new").entered();
         let (frame_layout, material_layout, object_layout, joints_layout) = create_layouts(device);
@@ -247,18 +251,15 @@ impl SceneRenderer {
         });
         let [white_srgb, white_linear, flat_normal] = fallback_textures(device, queue);
 
-        let pipelines = create_pipelines(
-            device,
-            [
-                &frame_layout,
-                &material_layout,
-                &object_layout,
-                &joints_layout,
-            ],
-            color_format,
-        );
-
-        let line_pipeline = create_line_pipeline(device, &frame_layout, color_format);
+        let layouts = [
+            &frame_layout,
+            &material_layout,
+            &object_layout,
+            &joints_layout,
+        ];
+        // Встроенные шейдеры обязаны собираться — иначе это ошибка в самом движке
+        let (pipelines, line_pipeline) = build_pipelines(device, layouts, color_format, sources)
+            .unwrap_or_else(|error| panic!("шейдеры движка не собрались: {error}"));
         let default_material = GpuMaterial::new(device, MaterialData::from(&Material::default()));
         Self {
             frame_layout,
@@ -291,9 +292,29 @@ impl SceneRenderer {
             visible: Vec::new(),
             order: Vec::new(),
             line_pipeline,
+            color_format,
             line_buffer: None,
             line_count: 0,
         }
+    }
+
+    /// Пересобирает пайплайны из новых исходников шейдеров. При ошибке старые остаются.
+    pub fn rebuild_shaders(
+        &mut self,
+        device: &wgpu::Device,
+        sources: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let layouts = [
+            &self.frame_layout,
+            &self.material_layout,
+            &self.object_layout,
+            &self.joints_layout,
+        ];
+        let (pipelines, line_pipeline) =
+            build_pipelines(device, layouts, self.color_format, sources)?;
+        self.pipelines = pipelines;
+        self.line_pipeline = line_pipeline;
+        Ok(())
     }
 
     pub fn upload_mesh(&mut self, device: &wgpu::Device, id: AssetId<Mesh>, mesh: &Mesh) {
@@ -595,6 +616,7 @@ impl SceneRenderer {
                 }),
                 stencil_ops: None,
             }),
+            timestamp_writes: target.timestamps.clone(),
             ..Default::default()
         });
         pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -1017,16 +1039,35 @@ fn create_texture(device: &wgpu::Device, queue: &wgpu::Queue, image: &Image) -> 
     }
 }
 
+type Pipelines = (
+    HashMap<PipelineKind, wgpu::RenderPipeline>,
+    wgpu::RenderPipeline,
+);
+
+/// Все пайплайны сцены из исходников шейдеров. Ошибка — текстом, без паники.
+fn build_pipelines(
+    device: &wgpu::Device,
+    layouts: [&wgpu::BindGroupLayout; 4],
+    color_format: wgpu::TextureFormat,
+    sources: &HashMap<String, String>,
+) -> Result<Pipelines, String> {
+    let pbr = crate::shaders::compile(device, sources, "shaders/pbr.wgsl")?;
+    let debug = crate::shaders::compile(device, sources, "shaders/debug.wgsl")?;
+    crate::shaders::checked(device, || {
+        (
+            create_pipelines(device, layouts, color_format, &pbr),
+            create_line_pipeline(device, layouts[0], color_format, &debug),
+        )
+    })
+}
+
 /// PBR-пайплайны для всех сочетаний: прозрачность × двусторонность × скиннинг.
 fn create_pipelines(
     device: &wgpu::Device,
     layouts: [&wgpu::BindGroupLayout; 4],
     color_format: wgpu::TextureFormat,
+    shader: &wgpu::ShaderModule,
 ) -> HashMap<PipelineKind, wgpu::RenderPipeline> {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("pbr"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pbr.wgsl").into()),
-    });
     // Обычным мешам группа костей (3) не нужна — у них своя раскладка из трёх групп
     let static_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("pbr"),
@@ -1054,7 +1095,7 @@ fn create_pipelines(
                 };
                 pipelines.insert(
                     kind,
-                    create_pipeline(device, layout, &shader, color_format, kind),
+                    create_pipeline(device, layout, shader, color_format, kind),
                 );
             }
         }
@@ -1066,11 +1107,8 @@ fn create_line_pipeline(
     device: &wgpu::Device,
     frame_layout: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
+    shader: &wgpu::ShaderModule,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("debug"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/debug.wgsl").into()),
-    });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("debug"),
         bind_group_layouts: &[Some(frame_layout)],
@@ -1080,7 +1118,7 @@ fn create_line_pipeline(
         label: Some("debug_lines"),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
@@ -1103,7 +1141,7 @@ fn create_line_pipeline(
         }),
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {

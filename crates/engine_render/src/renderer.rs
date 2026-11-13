@@ -19,6 +19,9 @@ pub(crate) struct SharedStats {
     pub snapshots_skipped: AtomicU64,
     pub frame_cpu_nanos: AtomicU64,
     pub drawn: AtomicU64,
+    /// Время GPU проходов, мкс; 0 или `u64::MAX` — нет данных.
+    pub gpu_scene_us: AtomicU64,
+    pub gpu_ui_us: AtomicU64,
     pub culled: AtomicU64,
     pub gpu_meshes: AtomicU64,
     pub gpu_textures: AtomicU64,
@@ -66,6 +69,9 @@ pub(crate) struct Renderer {
     ui: Option<egui_wgpu::Renderer>,
     /// Временные текстуры render graph, переиспользуемые между кадрами.
     pool: crate::graph::TexturePool,
+    timer: Option<crate::gpu_timer::GpuTimer>,
+    /// Исходники шейдеров по имени (`shaders/pbr.wgsl`): встроенные, затем обновления.
+    shader_sources: std::collections::HashMap<String, String>,
     /// Текстуры интерфейса, которые нужно освободить после отрисовки кадра.
     ui_free: Vec<egui::TextureId>,
 }
@@ -89,6 +95,8 @@ impl Renderer {
             ui: None,
             ui_free: Vec::new(),
             pool: crate::graph::TexturePool::default(),
+            timer: None,
+            shader_sources: crate::shaders::embedded_sources(),
         }
     }
 
@@ -174,6 +182,7 @@ impl Renderer {
                 self.configure();
             }
             RenderCommand::Screenshot { reply } => self.screenshots.push(reply),
+            RenderCommand::UpdateShader { name, source } => self.update_shader(name, source),
             RenderCommand::Shutdown => return Flow::Exit,
             resource => self.apply_resource(resource),
         }
@@ -215,6 +224,29 @@ impl Renderer {
         self.stats
             .gpu_textures
             .store(textures as u64, Ordering::Relaxed);
+    }
+
+    /// Новый исходник шейдера (горячая перезагрузка). Пайплайны пересобираются; при ошибке
+    /// в шейдере рендер продолжает работать со старыми — приложение не падает.
+    fn update_shader(&mut self, name: String, source: String) {
+        if self.shader_sources.get(&name) == Some(&source) {
+            return; // первая загрузка совпадает со встроенным — пересобирать нечего
+        }
+        let previous = self.shader_sources.insert(name.clone(), source);
+        let (Some(gpu), Some(scene)) = (&self.gpu, &mut self.scene) else {
+            return;
+        };
+        match scene.rebuild_shaders(&gpu.device, &self.shader_sources) {
+            Ok(()) => tracing::info!("Шейдер обновлён: {name}"),
+            Err(error) => {
+                tracing::error!("Ошибка в шейдере, остаются прежние пайплайны:\n{error}");
+                // Откатываем исходник: следующая правка другого файла не должна
+                // подхватить сломанный
+                if let Some(previous) = previous {
+                    self.shader_sources.insert(name, previous);
+                }
+            }
+        }
     }
 
     /// Проверяет асинхронную инициализацию GPU.
@@ -314,7 +346,13 @@ impl Renderer {
         self.pool.retain_size((width, height));
 
         if self.scene.is_none() {
-            self.scene = Some(SceneRenderer::new(&gpu.device, &gpu.queue, view_format));
+            self.timer = crate::gpu_timer::GpuTimer::new(&gpu.device, &gpu.queue);
+            self.scene = Some(SceneRenderer::new(
+                &gpu.device,
+                &gpu.queue,
+                view_format,
+                &self.shader_sources,
+            ));
             self.ui = Some(egui_wgpu::Renderer::new(
                 &gpu.device,
                 view_format,
@@ -345,6 +383,15 @@ impl Renderer {
             .culled
             .store(u64::from(draw.culled), Ordering::Relaxed);
         self.stats.frames_rendered.fetch_add(1, Ordering::Relaxed);
+        if let Some(timer) = &self.timer {
+            let [scene, ui] = timer.results;
+            self.stats
+                .gpu_scene_us
+                .store(scene.unwrap_or(u64::MAX), Ordering::Relaxed);
+            self.stats
+                .gpu_ui_us
+                .store(ui.unwrap_or(u64::MAX), Ordering::Relaxed);
+        }
     }
 
     /// Рисует кадр. `false` — кадр не нарисован (не готово, окно скрыто и т.п.).
@@ -408,12 +455,16 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        if let Some(timer) = &mut self.timer {
+            timer.collect(&gpu.device);
+        }
         let inputs = FrameInputs {
             gpu,
             view: &view,
             size: target.size,
             snapshot,
             alpha,
+            timer: self.timer.as_ref(),
         };
         let (draw, ui_commands) = execute_graph(
             &inputs,
@@ -422,6 +473,7 @@ impl Renderer {
             self.ui.as_mut(),
             &mut self.pool,
         );
+        let timer_slot = self.timer.as_ref().and_then(|t| t.resolve(&mut encoder));
 
         // Скриншот: копия кадра в буфер, читаемый процессором
         let readback = (!self.screenshots.is_empty())
@@ -438,6 +490,9 @@ impl Renderer {
             }
             if let Some(frame) = surface_frame {
                 gpu.queue.present(frame);
+            }
+            if let (Some(timer), Some(slot)) = (&self.timer, timer_slot) {
+                timer.after_submit(slot);
             }
         }
         self.finish_frame(work_started, draw);
@@ -480,12 +535,12 @@ fn acquire(surface: &wgpu::Surface<'static>) -> Acquired {
 /// которые нужно отправить раньше основного.
 fn render_ui(
     ui: &mut egui_wgpu::Renderer,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    gpu: &Gpu,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     size: WindowSize,
     frame: &crate::ui::UiFrame,
+    timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
 ) -> Vec<wgpu::CommandBuffer> {
     if frame.primitives.is_empty() {
         return Vec::new();
@@ -495,7 +550,7 @@ fn render_ui(
         size_in_pixels: [size.width, size.height],
         pixels_per_point: frame.pixels_per_point,
     };
-    let commands = ui.update_buffers(device, queue, encoder, &frame.primitives, &screen);
+    let commands = ui.update_buffers(&gpu.device, &gpu.queue, encoder, &frame.primitives, &screen);
     let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("ui"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -507,6 +562,7 @@ fn render_ui(
                 store: wgpu::StoreOp::Store,
             },
         })],
+        timestamp_writes: timestamps,
         ..Default::default()
     });
     // [Rust] egui-wgpu требует проход с временем жизни 'static. `forget_lifetime` снимает
@@ -523,6 +579,7 @@ struct FrameInputs<'a> {
     size: WindowSize,
     snapshot: &'a FrameSnapshot,
     alpha: f32,
+    timer: Option<&'a crate::gpu_timer::GpuTimer>,
 }
 
 /// Строит граф кадра и выполняет проходы по порядку. Сюда добавляются новые проходы
@@ -567,6 +624,7 @@ fn execute_graph(
                     color: frame.view,
                     depth: &transients[&depth_id],
                     size,
+                    timestamps: frame.timer.and_then(|t| t.writes(PassKind::Scene)),
                 };
                 draw = scene.render(
                     &gpu.device,
@@ -581,12 +639,12 @@ fn execute_graph(
                 if let Some(ui) = ui.as_deref_mut() {
                     ui_commands = render_ui(
                         ui,
-                        &gpu.device,
-                        &gpu.queue,
+                        gpu,
                         encoder,
                         frame.view,
                         frame.size,
                         &frame.snapshot.ui,
+                        frame.timer.and_then(|t| t.writes(PassKind::Ui)),
                     );
                 }
             }

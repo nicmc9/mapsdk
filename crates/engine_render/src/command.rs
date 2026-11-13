@@ -91,6 +91,11 @@ pub(crate) enum RenderCommand {
     RemoveMaterial(AssetId<Material>),
     /// Изменения текстур интерфейса (атлас шрифта) — терять нельзя, поэтому командой.
     UiTextures(Box<UiTextures>),
+    /// Новый исходник шейдера движка (горячая перезагрузка).
+    UpdateShader {
+        name: String,
+        source: String,
+    },
     /// Снимок следующего кадра.
     Screenshot {
         reply: ReplySender<Result<Screenshot, String>>,
@@ -114,6 +119,7 @@ impl std::fmt::Debug for RenderCommand {
             Self::RemoveImage(id) => write!(f, "RemoveImage({id:?})"),
             Self::RemoveMaterial(id) => write!(f, "RemoveMaterial({id:?})"),
             Self::UiTextures(_) => write!(f, "UiTextures"),
+            Self::UpdateShader { name, .. } => write!(f, "UpdateShader({name})"),
             Self::Screenshot { .. } => write!(f, "Screenshot"),
             Self::Shutdown => write!(f, "Shutdown"),
         }

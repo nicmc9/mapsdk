@@ -126,6 +126,10 @@ pub struct RenderStats {
     /// Нарисовано и отсечено примитивов в последнем кадре.
     pub drawn: u64,
     pub culled: u64,
+    /// Время GPU проходов: сцена и интерфейс. `None` — нет данных (метки не поддерживаются
+    /// или проход не выполнялся).
+    pub gpu_scene_time: Option<Duration>,
+    pub gpu_ui_time: Option<Duration>,
     /// Ресурсов в видеопамяти.
     pub gpu_meshes: u64,
     pub gpu_textures: u64,
@@ -250,6 +254,13 @@ impl Plugin for RenderPlugin {
             });
         }
         app.world_mut().insert_non_send(frontend);
+        // Шейдеры движка — ресурсы `engine://shaders/*.wgsl`: так их можно править на лету
+        {
+            let server = app.world().resource::<engine_assets::AssetServer>();
+            for (name, source) in crate::shaders::EMBEDDED {
+                server.register_embedded(&format!("engine://{name}"), source.as_bytes());
+            }
+        }
         app.init_resource::<ClearColor>()
             .init_resource::<RenderStats>()
             .init_resource::<crate::DebugDraw>()
@@ -257,11 +268,13 @@ impl Plugin for RenderPlugin {
             .add_systems(Stage::PreUpdate, crate::ui::ui_begin)
             .add_systems(Stage::PostUpdate, crate::debug_draw::builtin_debug_draw)
             .add_systems(Stage::First, update_stats)
+            .add_systems(Stage::Startup, load_engine_shaders)
             .add_systems(
                 Stage::Extract,
                 (
                     crate::ui::ui_end,
                     crate::extract::sync_assets,
+                    sync_shaders,
                     crate::extract::extract_frame,
                 )
                     .chain(),
@@ -398,6 +411,10 @@ fn update_stats(frontend: NonSend<RenderFrontend>, mut stats: ResMut<RenderStats
     stats.snapshots_skipped = s.snapshots_skipped.load(Ordering::Relaxed);
     stats.frame_cpu_time = Duration::from_nanos(s.frame_cpu_nanos.load(Ordering::Relaxed));
     stats.drawn = s.drawn.load(Ordering::Relaxed);
+    let micros =
+        |value: u64| (value != u64::MAX && value != 0).then(|| Duration::from_micros(value));
+    stats.gpu_scene_time = micros(s.gpu_scene_us.load(Ordering::Relaxed));
+    stats.gpu_ui_time = micros(s.gpu_ui_us.load(Ordering::Relaxed));
     stats.culled = s.culled.load(Ordering::Relaxed);
     stats.gpu_meshes = s.gpu_meshes.load(Ordering::Relaxed);
     stats.gpu_textures = s.gpu_textures.load(Ordering::Relaxed);
@@ -423,5 +440,46 @@ fn save_screenshot(world: &mut World, mut pending: Local<Option<ScreenshotReceiv
     }
     if SCREENSHOT_EXIT.get() {
         world.resource_mut::<AppControl>().request_exit();
+    }
+}
+
+/// Хэндлы шейдеров движка: имя (`shaders/pbr.wgsl`) → ресурс.
+#[derive(Resource)]
+struct EngineShaders(
+    Vec<(
+        &'static str,
+        engine_assets::Handle<engine_assets::formats::Shader>,
+    )>,
+);
+
+fn load_engine_shaders(mut commands: Commands, server: Res<engine_assets::AssetServer>) {
+    let handles = crate::shaders::EMBEDDED
+        .iter()
+        .map(|(name, _)| (*name, server.load(&format!("engine://{name}"))))
+        .collect();
+    commands.insert_resource(EngineShaders(handles));
+}
+
+/// Загруженный (или перезагруженный) шейдер движка → рендеру.
+fn sync_shaders(
+    shaders: Option<Res<EngineShaders>>,
+    assets: Res<engine_assets::Assets<engine_assets::formats::Shader>>,
+    mut events: MessageReader<engine_assets::AssetEvent<engine_assets::formats::Shader>>,
+    frontend: NonSend<RenderFrontend>,
+) {
+    let Some(shaders) = shaders else { return };
+    for event in events.read() {
+        let engine_assets::AssetEvent::Loaded(id) = event else {
+            continue;
+        };
+        let Some((name, handle)) = shaders.0.iter().find(|(_, h)| h.id() == *id) else {
+            continue;
+        };
+        if let Some(shader) = assets.get_loaded(handle) {
+            frontend.send(RenderCommand::UpdateShader {
+                name: (*name).to_owned(),
+                source: shader.source.clone(),
+            });
+        }
     }
 }
