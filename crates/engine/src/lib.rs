@@ -9,6 +9,7 @@ pub use engine_core::{
     CVarString, CVarValue, CVars, FixedTime, LOG_FILTER, MainWindow, Plugin, SIM_HZ, SIM_MAX_STEPS,
     Stage, Time, Window, WindowResized,
 };
+pub use engine_debug as debug;
 pub use engine_ecs as ecs;
 pub use engine_input as input;
 pub use engine_math as math;
@@ -35,11 +36,12 @@ pub mod prelude {
     pub use engine_assets::{
         AssetAppExt, AssetEvent, AssetPlugin, AssetServer, AssetStatus, Assets, Handle,
     };
+    pub use engine_debug::DebugPlugin;
     pub use engine_ecs::prelude::*;
     pub use engine_input::{Input, InputPlugin, Key, MouseButton};
     pub use engine_math::*;
     pub use engine_net::{NetPlugin, NetStats};
-    pub use engine_render::{ClearColor, Color, RenderPlugin, RenderStats};
+    pub use engine_render::{ClearColor, Color, DebugDraw, RenderPlugin, RenderStats, Ui};
     pub use engine_scene::{
         AmbientLight, Camera, DirectionalLight, GlobalTransform, Mesh3d, PointLight, ScenePlugin,
         SceneRoot, SceneSpawned, Transform, Visibility,

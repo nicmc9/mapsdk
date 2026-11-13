@@ -25,6 +25,8 @@ pub enum InputEvent {
         x: f32,
         y: f32,
     },
+    /// Введённый символ (с учётом раскладки и Shift) — для текстовых полей.
+    Char(char),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

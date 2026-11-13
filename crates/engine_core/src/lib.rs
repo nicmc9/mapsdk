@@ -16,6 +16,8 @@ pub use app::App;
 pub use cvar::{
     AnyCVar, CHEATS, CVar, CVarError, CVarFlags, CVarSource, CVarString, CVarValue, CVars,
 };
+/// Длительность (работает и на Web).
+pub use engine_platform::{Duration, Instant};
 pub use plugin::Plugin;
 pub use settings::{LOG_FILTER, SIM_HZ, SIM_MAX_STEPS};
 pub use stage::Stage;

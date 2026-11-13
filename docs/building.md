@@ -35,6 +35,7 @@ cargo run -p sandbox -- --cvar sim.hz=30 --cvar render.mode=inline --cvar log.fi
 
 Сцена: `--cvar sandbox.scene=sponza` (`showcase`, `sponza`, `helmet`).
 Управление: левая кнопка мыши или палец — вращение, колесо, щипок или Q/E — приближение.
+Отладка: `` ` `` — интерфейс (статистика, редактор CVar), F1 — сетка, F2 — границы мешей, F3 — оси.
 
 ### Скриншот
 

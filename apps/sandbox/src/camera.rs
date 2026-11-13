@@ -25,22 +25,29 @@ impl OrbitCamera {
 
 pub fn orbit_camera(
     input: Res<Input>,
+    ui: Res<Ui>,
     time: Res<Time>,
     mut cameras: Query<(&mut OrbitCamera, &mut Transform)>,
 ) {
     const ROTATE: f32 = 0.006;
+    // Мышь над отладочным интерфейсом — камеру не трогаем
+    let pointer_free = !ui.wants_pointer();
     for (mut orbit, mut transform) in &mut cameras {
         let mut rotate = engine::math::Vec2::ZERO;
-        if input.button_down(MouseButton::Left) {
+        if pointer_free && input.button_down(MouseButton::Left) {
             rotate += input.cursor_delta();
         }
-        if let Some(drag) = input.drag_delta() {
+        if let Some(drag) = input.drag_delta().filter(|_| pointer_free) {
             rotate += drag;
         }
         orbit.yaw -= rotate.x * ROTATE;
         orbit.pitch = (orbit.pitch - rotate.y * ROTATE).clamp(-1.5, 1.5);
 
-        let mut zoom = input.scroll() * 0.1;
+        let mut zoom = if pointer_free {
+            input.scroll() * 0.1
+        } else {
+            0.0
+        };
         if let Some(pinch) = input.pinch_delta() {
             zoom += pinch * 0.005;
         }

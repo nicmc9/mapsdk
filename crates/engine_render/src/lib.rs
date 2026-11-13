@@ -11,6 +11,7 @@
 
 mod color;
 mod command;
+mod debug_draw;
 mod extract;
 mod frontend;
 mod gpu;
@@ -18,14 +19,19 @@ mod renderer;
 mod scene;
 mod screenshot;
 mod snapshot;
+mod ui;
 
 pub use color::Color;
 pub use command::Screenshot;
+pub use debug_draw::{DEBUG_AXES, DEBUG_BOUNDS, DEBUG_GRID, DebugDraw};
+/// egui для своих окон: `engine::render::egui::Window::new(..)`.
+pub use egui;
 pub use frontend::{
     ClearColor, RENDER_BACKEND, RENDER_HEADLESS, RENDER_MODE, RenderMode, RenderPlugin,
     RenderStats, SCREENSHOT_EXIT, SCREENSHOT_FRAME, SCREENSHOT_PATH, ScreenshotReceiver,
     request_screenshot,
 };
+pub use ui::{DEBUG_UI, Ui};
 
 /// Сохраняет снимок в PNG (только native — на Web файловой системы нет).
 pub fn save_png(shot: &Screenshot, path: &str) -> Result<(), String> {

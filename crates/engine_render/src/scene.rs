@@ -124,6 +124,9 @@ pub(crate) struct SceneRenderer {
     visible: Vec<(usize, PipelineKind, f32)>,
     /// Порядок отрисовки — индексы в `visible`.
     order: Vec<usize>,
+    line_pipeline: wgpu::RenderPipeline,
+    line_buffer: Option<(wgpu::Buffer, u64)>,
+    line_count: u32,
 }
 
 /// Куда рисовать кадр.
@@ -222,6 +225,7 @@ impl SceneRenderer {
             color_format,
         );
 
+        let line_pipeline = create_line_pipeline(device, &frame_layout, color_format);
         let default_material = GpuMaterial::new(device, MaterialData::from(&Material::default()));
         Self {
             frame_layout,
@@ -246,6 +250,9 @@ impl SceneRenderer {
             manual_srgb: !color_format.is_srgb(),
             visible: Vec::new(),
             order: Vec::new(),
+            line_pipeline,
+            line_buffer: None,
+            line_count: 0,
         }
     }
 
@@ -340,6 +347,7 @@ impl SceneRenderer {
         let frame = self.frame_uniform(snapshot, &view_proj, camera_position);
         queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
         self.prepare_materials(device, snapshot);
+        self.upload_lines(device, queue, snapshot);
         self.draw(encoder, target, snapshot, alpha, &mut stats);
         stats
     }
@@ -506,6 +514,46 @@ impl SceneRenderer {
             pass.set_index_buffer(primitive.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..primitive.index_count, 0, 0..1);
             stats.drawn += 1;
+        }
+        // Отладочные линии — поверх сцены, с проверкой глубины
+        if let Some((buffer, _)) = &self.line_buffer
+            && self.line_count > 0
+        {
+            pass.set_pipeline(&self.line_pipeline);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..self.line_count, 0..1);
+        }
+    }
+
+    /// Копирует отладочные линии в GPU. Буфер растёт по мере надобности.
+    fn upload_lines(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        snapshot: &FrameSnapshot,
+    ) {
+        self.line_count = u32::try_from(snapshot.lines.len()).unwrap_or(0);
+        if snapshot.lines.is_empty() {
+            return;
+        }
+        let bytes: &[u8] = bytemuck::cast_slice(&snapshot.lines);
+        let needed = bytes.len() as u64;
+        if self
+            .line_buffer
+            .as_ref()
+            .is_none_or(|(_, capacity)| *capacity < needed)
+        {
+            let capacity = needed.next_power_of_two();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("debug_lines"),
+                size: capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.line_buffer = Some((buffer, capacity));
+        }
+        if let Some((buffer, _)) = &self.line_buffer {
+            queue.write_buffer(buffer, 0, bytes);
         }
     }
 
@@ -835,6 +883,61 @@ fn create_pipelines(
         }
     }
     pipelines
+}
+
+fn create_line_pipeline(
+    device: &wgpu::Device,
+    frame_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("debug"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/debug.wgsl").into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("debug"),
+        bind_group_layouts: &[Some(frame_layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("debug_lines"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<crate::debug_draw::LineVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+            })],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        // Глубина проверяется (линии прячутся за объектами), но не записывается
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn create_pipeline(

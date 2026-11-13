@@ -149,6 +149,7 @@ impl Input {
                 self.cursor = Some(position);
             }
             InputEvent::MouseWheel { delta } => self.scroll += delta,
+            InputEvent::Char(_) => {} // текст читают текстовые поля (UI)
             InputEvent::Touch { id, phase, x, y } => {
                 let position = Vec2::new(x, y);
                 match phase {

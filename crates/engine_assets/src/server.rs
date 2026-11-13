@@ -182,6 +182,26 @@ impl AssetServer {
         Ok(true)
     }
 
+    /// Ресурсы, загрузка которых упала: путь и ошибка.
+    pub fn failed(&self) -> Vec<(String, AssetError)> {
+        let state = self.lock();
+        let mut failed: Vec<_> = state
+            .infos
+            .values()
+            .filter_map(|info| match &info.status {
+                AssetStatus::Failed(error) => Some((
+                    info.path
+                        .as_ref()
+                        .map_or_else(String::new, ToString::to_string),
+                    error.clone(),
+                )),
+                _ => None,
+            })
+            .collect();
+        failed.sort_by(|a, b| a.0.cmp(&b.0));
+        failed
+    }
+
     /// Сколько ресурсов загружается, загружено, упало.
     pub fn counts(&self) -> (usize, usize, usize) {
         let state = self.lock();

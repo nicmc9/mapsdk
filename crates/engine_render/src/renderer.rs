@@ -63,6 +63,9 @@ pub(crate) struct Renderer {
     /// Ресурсы, пришедшие до готовности GPU, — применятся после инициализации.
     pending: Vec<RenderCommand>,
     screenshots: Vec<ReplySender<Result<Screenshot, String>>>,
+    ui: Option<egui_wgpu::Renderer>,
+    /// Текстуры интерфейса, которые нужно освободить после отрисовки кадра.
+    ui_free: Vec<egui::TextureId>,
 }
 
 impl Renderer {
@@ -81,6 +84,8 @@ impl Renderer {
             scene: None,
             pending: Vec::new(),
             screenshots: Vec::new(),
+            ui: None,
+            ui_free: Vec::new(),
         }
     }
 
@@ -188,6 +193,18 @@ impl Renderer {
             RenderCommand::RemoveMesh(id) => scene.remove_mesh(id),
             RenderCommand::RemoveImage(id) => scene.remove_image(id),
             RenderCommand::RemoveMaterial(id) => scene.remove_material(id),
+            RenderCommand::UiTextures(mut delta) => {
+                if let Some(ui) = &mut self.ui {
+                    for (id, images) in &delta.set {
+                        for image in images {
+                            ui.update_texture(&gpu.device, &gpu.queue, *id, image);
+                        }
+                    }
+                }
+                self.ui_free.extend(delta.free.iter().copied());
+                // egui проверяет, что изменения текстур не потерялись: помечаем их обработанными
+                delta.clear();
+            }
             _ => {}
         }
         let (meshes, textures, _) = scene.counts();
@@ -310,6 +327,11 @@ impl Renderer {
 
         if self.scene.is_none() {
             self.scene = Some(SceneRenderer::new(&gpu.device, &gpu.queue, view_format));
+            self.ui = Some(egui_wgpu::Renderer::new(
+                &gpu.device,
+                view_format,
+                egui_wgpu::RendererOptions::default(),
+            ));
             // Ресурсы, пришедшие до готовности GPU
             for command in std::mem::take(&mut self.pending) {
                 self.apply_resource(command);
@@ -317,6 +339,24 @@ impl Renderer {
         }
         // Рендер (снова) готов рисовать: пропуски за время простоя не считаем
         self.snapshots.resync();
+    }
+
+    /// После отправки кадра: освобождение текстур интерфейса и статистика.
+    fn finish_frame(&mut self, work_started: Instant, draw: crate::scene::DrawStats) {
+        if let Some(ui) = &mut self.ui {
+            for id in self.ui_free.drain(..) {
+                ui.free_texture(&id);
+            }
+        }
+        let work = u64::try_from(work_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.stats.frame_cpu_nanos.store(work, Ordering::Relaxed);
+        self.stats
+            .drawn
+            .store(u64::from(draw.drawn), Ordering::Relaxed);
+        self.stats
+            .culled
+            .store(u64::from(draw.culled), Ordering::Relaxed);
+        self.stats.frames_rendered.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Рисует кадр. `false` — кадр не нарисован (не готово, окно скрыто и т.п.).
@@ -394,12 +434,25 @@ impl Renderer {
             alpha,
         );
 
+        let ui_commands = self.ui.as_mut().map_or_else(Vec::new, |ui| {
+            render_ui(
+                ui,
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                &view,
+                target.size,
+                &snapshot.ui,
+            )
+        });
+
         // Скриншот: копия кадра в буфер, читаемый процессором
         let readback = (!self.screenshots.is_empty())
             .then(|| crate::screenshot::copy_to_buffer(&gpu.device, &mut encoder, texture));
         {
             let _zone = tracing::trace_span!("submit_present").entered();
-            gpu.queue.submit([encoder.finish()]);
+            gpu.queue
+                .submit(ui_commands.into_iter().chain([encoder.finish()]));
             if let Some(readback) = readback {
                 let result = readback.read(&gpu.device);
                 for reply in self.screenshots.drain(..) {
@@ -410,15 +463,7 @@ impl Renderer {
                 gpu.queue.present(frame);
             }
         }
-        let work = u64::try_from(work_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        self.stats.frame_cpu_nanos.store(work, Ordering::Relaxed);
-        self.stats
-            .drawn
-            .store(u64::from(draw.drawn), Ordering::Relaxed);
-        self.stats
-            .culled
-            .store(u64::from(draw.culled), Ordering::Relaxed);
-        self.stats.frames_rendered.fetch_add(1, Ordering::Relaxed);
+        self.finish_frame(work_started, draw);
         engine_platform::profiling::render_frame_mark();
         true
     }
@@ -452,4 +497,44 @@ fn acquire(surface: &wgpu::Surface<'static>) -> Acquired {
             Acquired::Skip
         }
     }
+}
+
+/// Интерфейс поверх сцены. Возвращает командные буферы egui (загрузка вершин),
+/// которые нужно отправить раньше основного.
+fn render_ui(
+    ui: &mut egui_wgpu::Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    size: WindowSize,
+    frame: &crate::ui::UiFrame,
+) -> Vec<wgpu::CommandBuffer> {
+    if frame.primitives.is_empty() {
+        return Vec::new();
+    }
+    let _zone = tracing::trace_span!("render_ui").entered();
+    let screen = egui_wgpu::ScreenDescriptor {
+        size_in_pixels: [size.width, size.height],
+        pixels_per_point: frame.pixels_per_point,
+    };
+    let commands = ui.update_buffers(device, queue, encoder, &frame.primitives, &screen);
+    let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("ui"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load, // поверх сцены
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    // [Rust] egui-wgpu требует проход с временем жизни 'static. `forget_lifetime` снимает
+    // привязку прохода к encoder — wgpu сам проверит порядок во время выполнения.
+    let mut pass = pass.forget_lifetime();
+    ui.render(&mut pass, &frame.primitives, &screen);
+    commands
 }

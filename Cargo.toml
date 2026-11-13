@@ -25,6 +25,7 @@ engine_net = { path = "crates/engine_net" }
 engine_assets = { path = "crates/engine_assets" }
 engine_scene = { path = "crates/engine_scene" }
 engine_input = { path = "crates/engine_input" }
+engine_debug = { path = "crates/engine_debug" }
 
 # Сторонние (описание каждого — docs/crates.md)
 winit = "0.30.13"
@@ -50,6 +51,9 @@ tracing-tracy = { version = "0.12.0", default-features = false, features = ["ena
 tracy-client = { version = "0.19.0", default-features = false, features = ["enable", "ondemand"] }
 toml = "1.2.1"
 bytemuck = { version = "1", features = ["derive"] }
+# Отладочный UI. egui-wgpu без фич по умолчанию: они включают WebGL (решение D3 — без него)
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
+egui-wgpu = { version = "0.37.0", default-features = false }
 # Асинхронные задачи: пулы потоков на native, spawn_local в браузере (часть bevy, как bevy_ecs)
 bevy_tasks = { version = "0.20.1", default-features = false, features = ["async_executor"] }
 async-channel = "2.5.0"

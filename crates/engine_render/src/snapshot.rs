@@ -20,6 +20,9 @@ pub(crate) struct FrameSnapshot {
     pub camera: Option<CameraSnapshot>,
     pub lights: LightsSnapshot,
     pub draws: Vec<DrawItem>,
+    /// Отладочные линии (пары вершин), уже в мировых координатах.
+    pub lines: Vec<crate::debug_draw::LineVertex>,
+    pub ui: crate::ui::UiFrame,
 }
 
 #[derive(Debug, Clone, Copy)]

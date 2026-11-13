@@ -105,7 +105,7 @@ impl InterpolationState {
 }
 
 /// Заполняет снимок кадра и публикует его рендеру.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // система ECS: параметры — это запрашиваемые данные
 pub(crate) fn extract_frame(
     clear_color: Res<ClearColor>,
     time: Res<Time>,
@@ -118,6 +118,7 @@ pub(crate) fn extract_frame(
     objects: Query<(Entity, &Mesh3d, &GlobalTransform)>,
     visibility: Query<(&Visibility, Option<&ChildOf>)>,
     mut frontend: NonSendMut<RenderFrontend>,
+    mut debug: ResMut<crate::DebugDraw>,
     // [Rust] `Local` — состояние, принадлежащее этой системе (как static-переменная внутри
     // функции, но своя у каждого экземпляра системы)
     mut state: Local<InterpolationState>,
@@ -192,6 +193,9 @@ pub(crate) fn extract_frame(
             });
         }
     }
+    // Линии живут один кадр: переносим в снимок и очищаем
+    snapshot.lines.clear();
+    snapshot.lines.append(&mut debug.vertices);
     frontend.snapshots.publish();
 
     // Удалённые сущности не должны копиться в состоянии интерполяции

@@ -23,6 +23,7 @@ pub fn run(launch: LaunchContext) -> Result<(), PlatformError> {
         .add_plugin(ScenePlugin)
         .add_plugin(InputPlugin)
         .add_plugin(RenderPlugin)
+        .add_plugin(DebugPlugin)
         .add_plugin(SandboxPlugin)
         .run(config, launch)
 }

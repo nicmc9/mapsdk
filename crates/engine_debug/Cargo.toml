@@ -1,0 +1,18 @@
+[package]
+name = "engine_debug"
+description = "Отладочный интерфейс: статистика, редактор CVar, горячие клавиши"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine_core = { workspace = true }
+engine_ecs = { workspace = true }
+engine_render = { workspace = true }
+engine_net = { workspace = true }
+engine_assets = { workspace = true }
+engine_input = { workspace = true }

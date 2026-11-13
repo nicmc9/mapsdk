@@ -148,6 +148,14 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
                         pressed: event.state.is_pressed(),
                     });
                 }
+                // Текст — отдельно: один физический Shift+A даёт символ «A» (или «Ф» в другой раскладке)
+                if event.state.is_pressed()
+                    && let Some(text) = &event.text
+                {
+                    for c in text.chars().filter(|c| !c.is_control()) {
+                        self.handler.input(InputEvent::Char(c));
+                    }
+                }
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let button = match button {

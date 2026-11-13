@@ -197,7 +197,11 @@ impl Plugin for RenderPlugin {
             .register_cvar(&RENDER_HEADLESS_HEIGHT)
             .register_cvar(&SCREENSHOT_PATH)
             .register_cvar(&SCREENSHOT_FRAME)
-            .register_cvar(&SCREENSHOT_EXIT);
+            .register_cvar(&SCREENSHOT_EXIT)
+            .register_cvar(&crate::debug_draw::DEBUG_GRID)
+            .register_cvar(&crate::debug_draw::DEBUG_BOUNDS)
+            .register_cvar(&crate::debug_draw::DEBUG_AXES)
+            .register_cvar(&crate::ui::DEBUG_UI);
         let headless = RENDER_HEADLESS.get();
         // Без окна нет цикла событий платформы — кадры рисует главный поток
         let mode = if headless {
@@ -248,10 +252,19 @@ impl Plugin for RenderPlugin {
         app.world_mut().insert_non_send(frontend);
         app.init_resource::<ClearColor>()
             .init_resource::<RenderStats>()
+            .init_resource::<crate::DebugDraw>()
+            .init_resource::<crate::Ui>()
+            .add_systems(Stage::PreUpdate, crate::ui::ui_begin)
+            .add_systems(Stage::PostUpdate, crate::debug_draw::builtin_debug_draw)
             .add_systems(Stage::First, update_stats)
             .add_systems(
                 Stage::Extract,
-                (crate::extract::sync_assets, crate::extract::extract_frame).chain(),
+                (
+                    crate::ui::ui_end,
+                    crate::extract::sync_assets,
+                    crate::extract::extract_frame,
+                )
+                    .chain(),
             )
             .add_systems(Stage::Last, (render_inline, save_screenshot))
             .add_lifecycle_hook(|world, event| {
