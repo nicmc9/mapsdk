@@ -1,0 +1,94 @@
+# CI: стиль кода и сборка на всех 5 платформах.
+# Версия Rust и платформы берутся из rust-toolchain.toml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Новый пуш в ту же ветку отменяет предыдущий прогон
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: Форматирование
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  desktop:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest }
+          - { name: macOS, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: android-actions/setup-android@v3
+      - name: Установка NDK, платформы и cargo-ndk
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;35.0.0" "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          cargo install cargo-ndk --version 4.1.2 --locked
+      - run: cargo clippy --workspace --all-targets --target aarch64-linux-android
+      - run: ./platforms/android/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-apk
+          path: platforms/android/build/sandbox.apk
+
+  ios:
+    name: iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --target aarch64-apple-ios
+      - run: cargo build -p sandbox --bin sandbox --target aarch64-apple-ios
+      - run: cargo build -p sandbox --bin sandbox --target aarch64-apple-ios-sim
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Установка wasm-bindgen-cli (версия из Cargo.lock)
+        run: |
+          VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+      - run: cargo clippy -p engine_platform -p sandbox --lib --target wasm32-unknown-unknown
+      - run: ./platforms/web/build.sh --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-web
+          path: |
+            platforms/web/index.html
+            platforms/web/pkg

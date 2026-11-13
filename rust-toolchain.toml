@@ -1,0 +1,12 @@
+# Закрепляет версию компилятора для всех разработчиков и CI.
+# [Rust] rustup читает этот файл сам: при первом вызове cargo скачает нужную
+# версию, компоненты и стандартные библиотеки для перечисленных платформ.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = [
+    "wasm32-unknown-unknown", # Web
+    "aarch64-linux-android",  # Android arm64 (устройства и эмулятор на Apple Silicon)
+    "aarch64-apple-ios",      # iOS устройства
+    "aarch64-apple-ios-sim",  # iOS симулятор на Apple Silicon
+]

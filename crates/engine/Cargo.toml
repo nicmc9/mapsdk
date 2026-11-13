@@ -1,0 +1,13 @@
+[package]
+name = "engine"
+description = "Фасад движка: реэкспортирует подсистемы в одном месте"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+engine_platform = { workspace = true }

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Минимальный манифест без Java/Kotlin-кода: используется системный NativeActivity,
+  который загружает libsandbox.so и вызывает android_main (apps/sandbox/src/lib.rs).
+  Когда понадобится Java-код (GameActivity, платёжные SDK и т.п.) — переходим на Gradle.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mapsdk.sandbox"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <application
+        android:label="Sandbox"
+        android:hasCode="false"
+        android:extractNativeLibs="true">
+        <!-- configChanges: при повороте и смене размера Activity не пересоздаётся,
+             движок получает событие Resized вместо перезапуска. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="sandbox" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,4 @@
+# Форматирование кода: `cargo fmt`. CI проверяет `cargo fmt --check`.
+edition = "2024"
+max_width = 100
+use_field_init_shorthand = true
