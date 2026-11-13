@@ -8,33 +8,46 @@
 mod app;
 mod config;
 mod error;
+mod handler;
 mod launch;
 mod logging;
+mod window;
 
 // [Rust] `pub use` — реэкспорт: пользователь пишет `engine_platform::PlatformConfig`,
 // не зная, в каком файле тип объявлен. Аналог `using` в заголовке namespace.
 pub use config::PlatformConfig;
 pub use error::PlatformError;
+pub use handler::{NextUpdate, PlatformHandler};
 pub use launch::LaunchContext;
 pub use logging::init_logging;
+pub use window::{PlatformWindow, WindowSize};
+
+/// Время, работающее на всех платформах.
+/// [Rust] `std::time::Instant` в браузере паникует: в wasm32-unknown-unknown нет системных
+/// часов. `web_time` на native — это просто `std::time`, а на Web использует `performance.now()`.
+pub use web_time::{Duration, Instant};
 
 #[cfg(target_os = "android")]
 pub use winit::platform::android::activity::AndroidApp;
 
 use winit::event_loop::EventLoop;
 
-/// Создаёт окно и запускает цикл событий ОС.
+/// Создаёт окно и запускает цикл событий ОС. События передаются в `handler`.
 ///
 /// Поведение возврата зависит от платформы:
 /// - macOS, Linux, Android — возвращает управление после закрытия окна;
 /// - iOS — не возвращает никогда (так устроен `UIApplicationMain`);
 /// - Web — возвращает сразу, цикл продолжает работать в браузере.
-pub fn run(config: PlatformConfig, launch: LaunchContext) -> Result<(), PlatformError> {
+pub fn run<H: PlatformHandler>(
+    config: PlatformConfig,
+    launch: LaunchContext,
+    handler: H,
+) -> Result<(), PlatformError> {
     init_logging();
     log::info!("Запуск: {config:?}");
 
     let event_loop = build_event_loop(launch)?;
-    let app = app::PlatformApp::new(config);
+    let app = app::PlatformApp::new(config, handler);
     run_event_loop(event_loop, app)
 }
 
@@ -57,7 +70,10 @@ fn build_event_loop(_launch: LaunchContext) -> Result<EventLoop<()>, PlatformErr
 #[cfg(target_arch = "wasm32")]
 // Сигнатура общая для всех платформ, поэтому Result оставляем, хотя здесь ошибок нет.
 #[allow(clippy::unnecessary_wraps)]
-fn run_event_loop(event_loop: EventLoop<()>, app: app::PlatformApp) -> Result<(), PlatformError> {
+fn run_event_loop<H: PlatformHandler>(
+    event_loop: EventLoop<()>,
+    app: app::PlatformApp<H>,
+) -> Result<(), PlatformError> {
     use winit::platform::web::EventLoopExtWebSys;
     // В браузере нельзя блокировать поток: цикл отдаётся браузеру, функция сразу возвращается.
     event_loop.spawn_app(app);
@@ -65,9 +81,9 @@ fn run_event_loop(event_loop: EventLoop<()>, app: app::PlatformApp) -> Result<()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run_event_loop(
+fn run_event_loop<H: PlatformHandler>(
     event_loop: EventLoop<()>,
-    mut app: app::PlatformApp,
+    mut app: app::PlatformApp<H>,
 ) -> Result<(), PlatformError> {
     event_loop.run_app(&mut app)?;
     // Ошибки внутри обработчиков событий нельзя вернуть через `?` (их вызывает winit),

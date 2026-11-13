@@ -1,0 +1,13 @@
+[package]
+name = "engine_math"
+description = "Математика движка: псевдонимы типов на glam и геометрия"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { workspace = true }

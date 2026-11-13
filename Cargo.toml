@@ -17,9 +17,17 @@ publish = false
 # Свои крейты
 engine = { path = "crates/engine" }
 engine_platform = { path = "crates/engine_platform" }
+engine_math = { path = "crates/engine_math" }
+engine_ecs = { path = "crates/engine_ecs" }
+engine_core = { path = "crates/engine_core" }
 
 # Сторонние (описание каждого — docs/crates.md)
 winit = "0.30.13"
+glam = "0.34.3"
+web-time = "1.1.0"
+raw-window-handle = "0.6.2"
+# Без bevy_reflect (рефлексия понадобится к редактору) и backtrace — меньше время сборки
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "async_executor"] }
 log = "0.4.35"
 thiserror = "2.0.21"
 env_logger = "0.11.11"
@@ -44,6 +52,8 @@ module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# Системы ECS обязаны принимать параметры (Res, Query) по значению — так их вызывает планировщик
+needless_pass_by_value = "allow"
 
 # Зависимости собираем с оптимизациями даже в debug: иначе рендер и физика
 # в отладочной сборке работают в десятки раз медленнее. Свой код остаётся -O0.

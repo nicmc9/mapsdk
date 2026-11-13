@@ -13,6 +13,8 @@ workspace = true
 winit = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
+web-time = { workspace = true }
+raw-window-handle = { workspace = true }
 
 # [Rust] Зависимости только для конкретной платформы — аналог if(ANDROID) в CMake.
 [target.'cfg(target_os = "android")'.dependencies]

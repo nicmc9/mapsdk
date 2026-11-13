@@ -1,0 +1,17 @@
+[package]
+name = "engine_ecs"
+description = "ECS движка: обёртка над bevy_ecs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bevy_ecs = { workspace = true }
+
+# Параллельное выполнение систем — только там, где есть потоки
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy_ecs = { workspace = true, features = ["multi_threaded"] }

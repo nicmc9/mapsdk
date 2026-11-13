@@ -10,4 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+engine_core = { workspace = true }
+engine_ecs = { workspace = true }
+engine_math = { workspace = true }
 engine_platform = { workspace = true }

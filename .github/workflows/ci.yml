@@ -84,7 +84,7 @@ jobs:
         run: |
           VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
           cargo install wasm-bindgen-cli --version "$VERSION" --locked
-      - run: cargo clippy -p engine_platform -p sandbox --lib --target wasm32-unknown-unknown
+      - run: cargo clippy --workspace --lib --target wasm32-unknown-unknown
       - run: ./platforms/web/build.sh --release
       - uses: actions/upload-artifact@v4
         with:

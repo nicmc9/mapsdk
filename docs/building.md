@@ -33,7 +33,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --target aarch64-linux-android -- -D warnings
 cargo clippy --workspace --all-targets --target aarch64-apple-ios -- -D warnings
-cargo clippy -p engine_platform -p sandbox --lib --target wasm32-unknown-unknown -- -D warnings
+cargo clippy --workspace --lib --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
 ```
 
