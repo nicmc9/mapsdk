@@ -15,6 +15,7 @@ mod debug_draw;
 mod extract;
 mod frontend;
 mod gpu;
+mod graph;
 mod renderer;
 mod scene;
 mod screenshot;

@@ -1039,6 +1039,7 @@ dependencies = [
  "engine_platform",
  "engine_scene",
  "image",
+ "thiserror 2.0.21",
  "tracing",
  "wgpu",
 ]

@@ -8,6 +8,7 @@ use engine_platform::{Instant, WindowSize};
 
 use crate::command::{RenderCommand, Screenshot};
 use crate::gpu::{Gpu, GpuInit};
+use crate::graph::{PassKind, RenderGraph, TextureDesc};
 use crate::scene::{DEPTH_FORMAT, SceneRenderer};
 use crate::snapshot::FrameSnapshot;
 
@@ -47,7 +48,6 @@ struct Target {
     size: WindowSize,
     /// Формат, в котором рисуют пайплайны (для окна — sRGB-вариант, если есть).
     view_format: Option<wgpu::TextureFormat>,
-    depth: Option<wgpu::TextureView>,
 }
 
 /// Рендер: владеет GPU и целью отрисовки. Работает в своём потоке или в главном —
@@ -64,6 +64,8 @@ pub(crate) struct Renderer {
     pending: Vec<RenderCommand>,
     screenshots: Vec<ReplySender<Result<Screenshot, String>>>,
     ui: Option<egui_wgpu::Renderer>,
+    /// Временные текстуры render graph, переиспользуемые между кадрами.
+    pool: crate::graph::TexturePool,
     /// Текстуры интерфейса, которые нужно освободить после отрисовки кадра.
     ui_free: Vec<egui::TextureId>,
 }
@@ -86,6 +88,7 @@ impl Renderer {
             screenshots: Vec::new(),
             ui: None,
             ui_free: Vec::new(),
+            pool: crate::graph::TexturePool::default(),
         }
     }
 
@@ -142,7 +145,6 @@ impl Renderer {
                     },
                     size,
                     view_format: None,
-                    depth: None,
                 });
                 self.configure();
             }
@@ -152,7 +154,6 @@ impl Renderer {
                     kind: TargetKind::Offscreen { texture: None },
                     size,
                     view_format: None,
-                    depth: None,
                 });
             }
             RenderCommand::SurfaceLost { reply } => {
@@ -308,22 +309,9 @@ impl Renderer {
                 format
             }
         };
-        let depth = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("depth"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        target.depth = Some(depth.create_view(&wgpu::TextureViewDescriptor::default()));
         target.view_format = Some(view_format);
+        // Временные текстуры графа (глубина и т.п.) старого размера больше не нужны
+        self.pool.retain_size((width, height));
 
         if self.scene.is_none() {
             self.scene = Some(SceneRenderer::new(&gpu.device, &gpu.queue, view_format));
@@ -376,7 +364,7 @@ impl Renderer {
         else {
             return false;
         };
-        let (Some(view_format), Some(depth)) = (target.view_format, &target.depth) else {
+        let Some(view_format) = target.view_format else {
             return false;
         };
 
@@ -420,31 +408,20 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
-        let frame_target = crate::scene::FrameTarget {
-            color: &view,
-            depth,
-            size: (target.size.width, target.size.height),
-        };
-        let draw = scene.render(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &frame_target,
+        let inputs = FrameInputs {
+            gpu,
+            view: &view,
+            size: target.size,
             snapshot,
             alpha,
+        };
+        let (draw, ui_commands) = execute_graph(
+            &inputs,
+            &mut encoder,
+            scene,
+            self.ui.as_mut(),
+            &mut self.pool,
         );
-
-        let ui_commands = self.ui.as_mut().map_or_else(Vec::new, |ui| {
-            render_ui(
-                ui,
-                &gpu.device,
-                &gpu.queue,
-                &mut encoder,
-                &view,
-                target.size,
-                &snapshot.ui,
-            )
-        });
 
         // Скриншот: копия кадра в буфер, читаемый процессором
         let readback = (!self.screenshots.is_empty())
@@ -537,4 +514,83 @@ fn render_ui(
     let mut pass = pass.forget_lifetime();
     ui.render(&mut pass, &frame.primitives, &screen);
     commands
+}
+
+/// Всё, что нужно проходам кадра, кроме изменяемых частей рендера.
+struct FrameInputs<'a> {
+    gpu: &'a Gpu,
+    view: &'a wgpu::TextureView,
+    size: WindowSize,
+    snapshot: &'a FrameSnapshot,
+    alpha: f32,
+}
+
+/// Строит граф кадра и выполняет проходы по порядку. Сюда добавляются новые проходы
+/// (тени, постэффекты): ресурс + проход в графе + ветка в `match`.
+fn execute_graph(
+    frame: &FrameInputs<'_>,
+    encoder: &mut wgpu::CommandEncoder,
+    scene: &mut SceneRenderer,
+    mut ui: Option<&mut egui_wgpu::Renderer>,
+    pool: &mut crate::graph::TexturePool,
+) -> (crate::scene::DrawStats, Vec<wgpu::CommandBuffer>) {
+    let gpu = frame.gpu;
+    // Сцена пишет в цель и глубину, интерфейс дорисовывает поверх
+    let mut graph = RenderGraph::default();
+    let color = graph.import("target");
+    let depth_id = graph.transient(
+        "depth",
+        TextureDesc {
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        },
+    );
+    graph.add_pass(PassKind::Scene, &[], &[color, depth_id]);
+    graph.add_pass(PassKind::Ui, &[], &[color]);
+    let order = graph.compile(color).unwrap_or_else(|error| {
+        tracing::error!("Render graph: {error}");
+        Vec::new()
+    });
+    let size = (frame.size.width, frame.size.height);
+    let transients: std::collections::HashMap<_, _> = graph
+        .transients()
+        .map(|(id, name, desc)| (id, pool.get(&gpu.device, name, desc, size)))
+        .collect();
+
+    let mut draw = crate::scene::DrawStats::default();
+    let mut ui_commands = Vec::new();
+    for pass in order {
+        let _zone = tracing::trace_span!("pass", ?pass).entered();
+        match pass {
+            PassKind::Scene => {
+                let target = crate::scene::FrameTarget {
+                    color: frame.view,
+                    depth: &transients[&depth_id],
+                    size,
+                };
+                draw = scene.render(
+                    &gpu.device,
+                    &gpu.queue,
+                    encoder,
+                    &target,
+                    frame.snapshot,
+                    frame.alpha,
+                );
+            }
+            PassKind::Ui => {
+                if let Some(ui) = ui.as_deref_mut() {
+                    ui_commands = render_ui(
+                        ui,
+                        &gpu.device,
+                        &gpu.queue,
+                        encoder,
+                        frame.view,
+                        frame.size,
+                        &frame.snapshot.ui,
+                    );
+                }
+            }
+        }
+    }
+    (draw, ui_commands)
 }

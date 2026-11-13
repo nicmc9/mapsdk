@@ -19,6 +19,7 @@ engine_scene = { workspace = true }
 wgpu = { workspace = true }
 tracing = { workspace = true }
 bytemuck = { workspace = true }
+thiserror = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
