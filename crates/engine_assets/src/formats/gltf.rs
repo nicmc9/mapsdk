@@ -6,13 +6,13 @@
 use std::collections::HashSet;
 
 use engine_core::tasks::BoxedFuture;
-use engine_math::{Quat, Vec3};
+use engine_math::{Aabb, Quat, Vec3};
 
 use super::image::{ColorSpace, Image};
 use crate::{Asset, AssetError, AssetLoader, Bytes, Handle, LoadContext};
 
 /// Часть меша с одним материалом.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Primitive {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -24,6 +24,8 @@ pub struct Primitive {
     pub indices: Vec<u32>,
     /// Индекс в `Gltf::materials`.
     pub material: Option<usize>,
+    /// Границы в локальных координатах меша — для отсечения.
+    pub bounds: Aabb,
 }
 
 /// Меш. Вложенный ресурс: путь `файл.glb#Mesh0`.
@@ -51,7 +53,7 @@ pub enum AlphaMode {
     Blend,
 }
 
-/// PBR-материал (metallic-roughness, как в glTF).
+/// PBR-материал (metallic-roughness, как в glTF). Вложенный ресурс: `файл.glb#Material0`.
 #[derive(Debug, Clone)]
 pub struct Material {
     pub name: String,
@@ -66,6 +68,28 @@ pub struct Material {
     pub emissive_texture: Option<Handle<Image>>,
     pub alpha_mode: AlphaMode,
     pub double_sided: bool,
+}
+
+impl Asset for Material {}
+
+impl Default for Material {
+    /// Белый матовый неметалл — как материал по умолчанию в glTF.
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            base_color: [1.0; 4],
+            base_color_texture: None,
+            metallic: 1.0,
+            roughness: 1.0,
+            metallic_roughness_texture: None,
+            normal_texture: None,
+            occlusion_texture: None,
+            emissive: [0.0; 3],
+            emissive_texture: None,
+            alpha_mode: AlphaMode::Opaque,
+            double_sided: false,
+        }
+    }
 }
 
 /// Узел иерархии сцены.
@@ -85,13 +109,15 @@ pub struct Node {
 pub struct Skin {
     pub name: String,
     pub joints: Vec<usize>,
+    /// Обратные матрицы привязки: переводят вершину из пространства меша в пространство кости.
+    pub inverse_bind_matrices: Vec<engine_math::Mat4>,
 }
 
 /// Загруженный файл glTF.
 #[derive(Debug, Clone)]
 pub struct Gltf {
     pub meshes: Vec<Handle<Mesh>>,
-    pub materials: Vec<Material>,
+    pub materials: Vec<Handle<Material>>,
     pub images: Vec<Handle<Image>>,
     pub nodes: Vec<Node>,
     pub skins: Vec<Skin>,
@@ -130,7 +156,11 @@ async fn load_gltf(bytes: &[u8], ctx: &mut LoadContext) -> Result<Gltf, AssetErr
 
     let buffers = read_buffers(&document, blob, ctx).await?;
     let images = load_images(&document, &buffers, ctx)?;
-    let materials = read_materials(&document, &images);
+    let materials = read_materials(&document, &images)
+        .into_iter()
+        .enumerate()
+        .map(|(index, material)| ctx.add_labeled(&format!("Material{index}"), material))
+        .collect();
     let meshes = read_meshes(&document, &buffers, ctx)?;
     let nodes = read_nodes(&document);
 
@@ -141,9 +171,19 @@ async fn load_gltf(bytes: &[u8], ctx: &mut LoadContext) -> Result<Gltf, AssetErr
         nodes,
         skins: document
             .skins()
-            .map(|skin| Skin {
-                name: skin.name().unwrap_or_default().to_owned(),
-                joints: skin.joints().map(|j| j.index()).collect(),
+            .map(|skin| {
+                let reader = skin.reader(|buffer| buffers.get(buffer.index()).map(|b| &b[..]));
+                Skin {
+                    name: skin.name().unwrap_or_default().to_owned(),
+                    joints: skin.joints().map(|j| j.index()).collect(),
+                    inverse_bind_matrices: reader
+                        .read_inverse_bind_matrices()
+                        .map(|m| {
+                            m.map(|c| engine_math::Mat4::from_cols_array_2d(&c))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
             })
             .collect(),
         scenes: document
@@ -267,7 +307,9 @@ fn read_meshes(
                 || (0..u32::try_from(positions.len()).unwrap_or(u32::MAX)).collect(),
                 |indices| indices.into_u32().collect(),
             );
+            let bounds = Aabb::from_points(positions.iter().map(|p| Vec3::from_array(*p)));
             primitives.push(Primitive {
+                bounds,
                 normals: reader
                     .read_normals()
                     .map(Iterator::collect)

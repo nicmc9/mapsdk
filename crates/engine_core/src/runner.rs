@@ -1,7 +1,9 @@
-use engine_platform::{Instant, NextUpdate, PlatformHandler, PlatformWindow, WindowSize};
+use engine_platform::{
+    InputEvent, Instant, NextUpdate, PlatformHandler, PlatformWindow, WindowSize,
+};
 
 use crate::window::MainWindow;
-use crate::{App, AppLifecycle, LifecycleHook, Time, Window, WindowResized};
+use crate::{App, AppLifecycle, LifecycleHook, PlatformInput, Time, Window, WindowResized};
 
 /// Связывает цикл событий платформы с [`App`]: события ОС превращаются в ресурсы
 /// и сообщения ECS, а кадры выполняются с темпом фиксированного шага.
@@ -19,6 +21,13 @@ impl AppRunner {
             app,
             next_frame: None,
         }
+    }
+
+    fn exit_requested(&self) -> bool {
+        self.app
+            .world()
+            .resource::<crate::AppControl>()
+            .exit_requested()
     }
 
     fn set_window_state(&mut self, size: WindowSize, scale_factor: f64) {
@@ -58,6 +67,9 @@ impl PlatformHandler for AppRunner {
     fn update(&mut self) -> NextUpdate {
         self.app.update_at(Instant::now());
         engine_platform::profiling::frame_mark();
+        if self.exit_requested() {
+            return NextUpdate::Exit;
+        }
         NextUpdate::NextDisplayFrame
     }
 
@@ -74,9 +86,16 @@ impl PlatformHandler for AppRunner {
         }
         self.app.update_at(now);
         engine_platform::profiling::frame_mark();
+        if self.exit_requested() {
+            return NextUpdate::Exit;
+        }
         let next = self.app.next_update_time(now);
         self.next_frame = Some(next);
         NextUpdate::At(next)
+    }
+
+    fn input(&mut self, event: InputEvent) {
+        self.app.world_mut().write_message(PlatformInput(event));
     }
 
     fn exiting(&mut self) {

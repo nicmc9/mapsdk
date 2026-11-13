@@ -47,6 +47,7 @@ impl App {
         world.insert_resource(Time::new(Instant::now()));
         world.init_resource::<FixedTime>();
         world.init_resource::<Window>();
+        world.init_resource::<crate::AppControl>();
 
         let mut app = Self {
             world,
@@ -71,12 +72,22 @@ impl App {
                 tracing::error!("Аргумент запуска: {error}");
             }
         }
+        // Пользовательский engine.toml на устройстве (Android, iOS)
+        if let Some(path) = engine_platform::paths::config_dir().map(|d| d.join("engine.toml"))
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            tracing::info!("Конфигурация: {}", path.display());
+            if let Err(error) = cvars.load_toml(&text, CVarSource::UserFile) {
+                tracing::error!("{}: {error}", path.display());
+            }
+        }
         app.insert_resource(cvars);
         app.register_cvar(&CHEATS)
             .register_cvar(&SIM_HZ)
             .register_cvar(&SIM_MAX_STEPS)
             .register_cvar(&LOG_FILTER);
         app.add_message::<WindowResized>()
+            .add_message::<crate::PlatformInput>()
             .add_message::<AppLifecycle>();
         app
     }
@@ -234,10 +245,21 @@ impl App {
         config: PlatformConfig,
         launch: LaunchContext,
     ) -> Result<(), PlatformError> {
-        // [Rust] `mem::take` забирает App из `self`, оставляя на его месте новый пустой
-        // (через Default). Нужно, потому что цикл событий должен владеть App целиком.
-        let app = std::mem::take(self);
+        // [Rust] `mem::replace` забирает App из `self`, оставляя на его месте заготовку.
+        // Нужно, потому что цикл событий должен владеть App целиком.
+        // На месте self остаётся пустая заготовка (без плагинов и повторного чтения конфигурации)
+        let app = std::mem::replace(self, Self::placeholder());
         engine_platform::run(config, launch, crate::runner::AppRunner::new(app))
+    }
+
+    fn placeholder() -> Self {
+        Self {
+            world: World::new(),
+            plugins: Vec::new(),
+            plugin_names: HashSet::new(),
+            lifecycle_hooks: Vec::new(),
+            started: false,
+        }
     }
 
     pub(crate) fn set_main_window(&mut self, window: MainWindow) {

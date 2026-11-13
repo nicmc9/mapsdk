@@ -58,6 +58,7 @@ fn install() -> reload::Handle<EnvFilter, Registry> {
     if let Err(error) = subscriber.try_init() {
         eprintln!("Логи уже настроены другим подписчиком: {error}");
     }
+    install_panic_hook();
     handle
 }
 
@@ -96,4 +97,29 @@ fn output_layer() -> impl Layer<Registry> + Send + Sync {
         .with_writer(tracing_web::MakeWebConsoleWriter::new())
         .with_ansi(false)
         .without_time()
+}
+
+/// Паника (в любом потоке) — в наш лог с местом и именем потока.
+///
+/// [Rust] Стандартный обработчик печатает панику в stderr. На Android и iOS-устройстве
+/// stderr никуда не попадает — поток рендера упал бы молча. Свой обработчик пишет в лог
+/// платформы, затем вызывает стандартный (он печатает backtrace при `RUST_BACKTRACE=1`).
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("без имени");
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(ToString::to_string)
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "?".to_owned());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        tracing::error!("ПАНИКА в потоке «{name}»: {message} ({location})");
+        default(info);
+    }));
 }

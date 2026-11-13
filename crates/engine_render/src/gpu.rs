@@ -32,12 +32,13 @@ type InitFuture = Pin<Box<dyn Future<Output = Result<Gpu, String>> + Send>>;
 type InitFuture = Pin<Box<dyn Future<Output = Result<Gpu, String>>>>;
 
 impl GpuInit {
-    pub fn start(instance: &wgpu::Instance, surface: &wgpu::Surface<'static>) -> Self {
+    /// `surface` — `None` для рендера без окна.
+    pub fn start(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'static>>) -> Self {
         // Future адаптера создаётся до async-блока: он не держит ссылку на surface,
         // поэтому весь блок может жить сколько угодно ('static).
         let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(surface),
+            compatible_surface: surface,
             // Остальное — по умолчанию (программный адаптер не нужен и т.п.)
             ..Default::default()
         });

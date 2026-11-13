@@ -23,6 +23,8 @@ engine_core = { path = "crates/engine_core" }
 engine_render = { path = "crates/engine_render" }
 engine_net = { path = "crates/engine_net" }
 engine_assets = { path = "crates/engine_assets" }
+engine_scene = { path = "crates/engine_scene" }
+engine_input = { path = "crates/engine_input" }
 
 # Сторонние (описание каждого — docs/crates.md)
 winit = "0.30.13"
@@ -47,6 +49,7 @@ tracing-web = "0.1.4"
 tracing-tracy = { version = "0.12.0", default-features = false, features = ["enable", "ondemand"] }
 tracy-client = { version = "0.19.0", default-features = false, features = ["enable", "ondemand"] }
 toml = "1.2.1"
+bytemuck = { version = "1", features = ["derive"] }
 # Асинхронные задачи: пулы потоков на native, spawn_local в браузере (часть bevy, как bevy_ecs)
 bevy_tasks = { version = "0.20.1", default-features = false, features = ["async_executor"] }
 async-channel = "2.5.0"
@@ -83,6 +86,12 @@ needless_pass_by_value = "allow"
 # Зависимости собираем с оптимизациями даже в debug: иначе рендер и физика
 # в отладочной сборке работают в десятки раз медленнее. Свой код остаётся -O0.
 [profile.dev.package."*"]
+opt-level = 2
+
+# Свои крейты с тяжёлыми циклами по данным (декодирование, мип-уровни) — тоже с оптимизацией.
+# Без неё загрузка текстур в debug в десятки раз медленнее. Пошаговая отладка внутри
+# этого крейта станет менее точной — при необходимости временно уберите строку.
+[profile.dev.package.engine_assets]
 opt-level = 2
 
 [profile.release]

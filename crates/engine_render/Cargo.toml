@@ -1,6 +1,6 @@
 [package]
 name = "engine_render"
-description = "Рендер: wgpu, поток рендера, снимок кадра"
+description = "Рендер: wgpu, поток рендера, PBR, offscreen и скриншоты"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,14 @@ workspace = true
 [dependencies]
 engine_core = { workspace = true }
 engine_ecs = { workspace = true }
+engine_math = { workspace = true }
 engine_platform = { workspace = true }
+engine_assets = { workspace = true }
+engine_scene = { workspace = true }
 wgpu = { workspace = true }
 tracing = { workspace = true }
+bytemuck = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+engine_net = { workspace = true }

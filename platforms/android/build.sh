@@ -13,11 +13,13 @@ PACKAGE=com.mapsdk.sandbox
 ABI=arm64-v8a
 API=34
 CARGO_FLAGS=()
+# Отладочная сборка помечается debuggable: работают run-as (доступ к файлам приложения) и отладчик
+AAPT_FLAGS=(--debug-mode)
 RUN=0
 
 for arg in "$@"; do
   case "$arg" in
-    --release) CARGO_FLAGS+=(--release) ;;
+    --release) CARGO_FLAGS+=(--release); AAPT_FLAGS=() ;;
     --run) RUN=1 ;;
     *) echo "Неизвестный аргумент: $arg" >&2; exit 1 ;;
   esac
@@ -39,7 +41,7 @@ cargo ndk -t "$ABI" -P 26 -o "$OUT/lib" build -p sandbox --lib ${CARGO_FLAGS[@]+
 # 2. Манифест → пустой APK, затем добавляем нативные библиотеки
 # -A: папка assets попадает в APK (читается через AAssetManager)
 "$BUILD_TOOLS/aapt2" link -o "$OUT/unaligned.apk" --manifest "$ANDROID_DIR/AndroidManifest.xml" \
-  -I "$ANDROID_JAR" -A "$ROOT/assets"
+  -I "$ANDROID_JAR" -A "$ROOT/assets" ${AAPT_FLAGS[@]+"${AAPT_FLAGS[@]}"}
 (cd "$OUT" && zip -qr unaligned.apk lib)
 
 # 3. Выравнивание и подпись debug-ключом (создаётся при первом запуске)

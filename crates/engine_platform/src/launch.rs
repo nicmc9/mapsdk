@@ -14,6 +14,9 @@ pub struct LaunchContext {
 #[cfg(target_os = "android")]
 impl LaunchContext {
     pub fn android(app: crate::AndroidApp) -> Self {
+        // Сразу делаем Activity доступной: пути приложения нужны ещё до запуска цикла
+        // событий (конфигурация читается в App::new)
+        crate::android::set_app(&app);
         Self { android_app: app }
     }
 

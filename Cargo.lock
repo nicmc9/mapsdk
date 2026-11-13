@@ -716,10 +716,12 @@ dependencies = [
  "engine_assets",
  "engine_core",
  "engine_ecs",
+ "engine_input",
  "engine_math",
  "engine_net",
  "engine_platform",
  "engine_render",
+ "engine_scene",
  "tracing",
 ]
 
@@ -758,6 +760,16 @@ name = "engine_ecs"
 version = "0.1.0"
 dependencies = [
  "bevy_ecs",
+]
+
+[[package]]
+name = "engine_input"
+version = "0.1.0"
+dependencies = [
+ "engine_core",
+ "engine_ecs",
+ "engine_math",
+ "engine_platform",
 ]
 
 [[package]]
@@ -808,11 +820,28 @@ dependencies = [
 name = "engine_render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "engine_assets",
  "engine_core",
  "engine_ecs",
+ "engine_math",
+ "engine_net",
  "engine_platform",
+ "engine_scene",
+ "image",
  "tracing",
  "wgpu",
+]
+
+[[package]]
+name = "engine_scene"
+version = "0.1.0"
+dependencies = [
+ "engine_assets",
+ "engine_core",
+ "engine_ecs",
+ "engine_math",
+ "tracing",
 ]
 
 [[package]]

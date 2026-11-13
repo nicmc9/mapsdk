@@ -1,4 +1,4 @@
-use crate::{Instant, PlatformWindow, WindowSize};
+use crate::{InputEvent, Instant, PlatformWindow, WindowSize};
 
 /// Что платформа сообщает верхнему слою (ядру движка).
 ///
@@ -20,6 +20,9 @@ pub trait PlatformHandler: 'static {
 
     /// Очередь событий ОС пуста — время выполнить кадр. Возвращает, когда вызвать снова.
     fn update(&mut self) -> NextUpdate;
+
+    /// Событие ввода: клавиатура, мышь, касания.
+    fn input(&mut self, event: InputEvent);
 
     /// Пользователь закрывает окно. `true` — разрешить выход.
     fn close_requested(&mut self) -> bool {

@@ -34,4 +34,9 @@ impl<T> ReplyReceiver<T> {
     pub fn wait(self, timeout: Duration) -> Option<T> {
         self.rx.recv_timeout(timeout).ok()
     }
+
+    /// Проверяет ответ без ожидания — для опроса из кадра.
+    pub fn try_get(&self) -> Option<T> {
+        self.rx.try_recv().ok()
+    }
 }

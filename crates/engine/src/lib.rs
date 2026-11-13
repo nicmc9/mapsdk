@@ -5,15 +5,17 @@
 
 pub use engine_assets as assets;
 pub use engine_core::{
-    AnyCVar, App, AppLifecycle, CHEATS, CVar, CVarError, CVarFlags, CVarSource, CVarString,
-    CVarValue, CVars, FixedTime, LOG_FILTER, MainWindow, Plugin, SIM_HZ, SIM_MAX_STEPS, Stage,
-    Time, Window, WindowResized,
+    AnyCVar, App, AppControl, AppLifecycle, CHEATS, CVar, CVarError, CVarFlags, CVarSource,
+    CVarString, CVarValue, CVars, FixedTime, LOG_FILTER, MainWindow, Plugin, SIM_HZ, SIM_MAX_STEPS,
+    Stage, Time, Window, WindowResized,
 };
 pub use engine_ecs as ecs;
+pub use engine_input as input;
 pub use engine_math as math;
 pub use engine_net as net;
 pub use engine_platform as platform;
 pub use engine_render as render;
+pub use engine_scene as scene;
 
 /// Логи и зоны профайлера: `engine::log::info!("...")`, `engine::log::trace_span!("zone")`.
 ///
@@ -27,14 +29,19 @@ pub mod prelude {
     //! Всё, что нужно в большинстве файлов проекта.
 
     pub use crate::{
-        App, AppLifecycle, CVar, CVarFlags, CVars, FixedTime, Plugin, Stage, Time, Window,
-        WindowResized,
+        App, AppControl, AppLifecycle, CVar, CVarFlags, CVars, FixedTime, Plugin, Stage, Time,
+        Window, WindowResized,
     };
     pub use engine_assets::{
         AssetAppExt, AssetEvent, AssetPlugin, AssetServer, AssetStatus, Assets, Handle,
     };
     pub use engine_ecs::prelude::*;
+    pub use engine_input::{Input, InputPlugin, Key, MouseButton};
     pub use engine_math::*;
     pub use engine_net::{NetPlugin, NetStats};
     pub use engine_render::{ClearColor, Color, RenderPlugin, RenderStats};
+    pub use engine_scene::{
+        AmbientLight, Camera, DirectionalLight, GlobalTransform, Mesh3d, PointLight, ScenePlugin,
+        SceneRoot, SceneSpawned, Transform, Visibility,
+    };
 }

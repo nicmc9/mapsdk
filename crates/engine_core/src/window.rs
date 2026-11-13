@@ -41,3 +41,29 @@ pub enum LifecycleHook<'a> {
     Resized { size: WindowSize, scale_factor: f64 },
     Exiting,
 }
+
+/// Событие ввода от платформы. Читается через `MessageReader<PlatformInput>`;
+/// удобное состояние (нажатые клавиши и т.д.) собирает `engine_input`.
+///
+/// [Rust] Обёртка нужна из-за правила сироты (orphan rule): трейт `Message` (из `bevy_ecs`)
+/// нельзя реализовать для `InputEvent` (из `engine_platform`) в третьем крейте —
+/// хотя бы трейт или тип должен быть «своим». Своя обёртка решает это.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct PlatformInput(pub engine_platform::InputEvent);
+
+/// Управление приложением из систем.
+#[derive(Resource, Debug, Default)]
+pub struct AppControl {
+    exit_requested: bool,
+}
+
+impl AppControl {
+    /// Завершить приложение после текущего кадра.
+    pub fn request_exit(&mut self) {
+        self.exit_requested = true;
+    }
+
+    pub fn exit_requested(&self) -> bool {
+        self.exit_requested
+    }
+}

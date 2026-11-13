@@ -20,4 +20,6 @@ pub use plugin::Plugin;
 pub use settings::{LOG_FILTER, SIM_HZ, SIM_MAX_STEPS};
 pub use stage::Stage;
 pub use time::{FixedTime, Time};
-pub use window::{AppLifecycle, LifecycleHook, MainWindow, Window, WindowResized};
+pub use window::{
+    AppControl, AppLifecycle, LifecycleHook, MainWindow, PlatformInput, Window, WindowResized,
+};

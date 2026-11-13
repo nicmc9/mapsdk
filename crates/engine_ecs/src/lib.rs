@@ -9,13 +9,15 @@ pub mod prelude {
     // Сущности, компоненты, ресурсы
     pub use bevy_ecs::prelude::{Bundle, Component, Entity, Resource, World};
     // Параметры систем
-    pub use bevy_ecs::prelude::{Commands, Local, Query, Res, ResMut, Single};
+    pub use bevy_ecs::prelude::{Commands, Local, Query, Ref, Res, ResMut, Single};
+    // [Rust] Методы трейта (`is_added`, `is_changed`) доступны, только если трейт импортирован
+    pub use bevy_ecs::prelude::{DetectChanges, DetectChangesMut};
     // Ресурсы, доступные только из главного потока (объекты ОС, wgpu на Web)
     pub use bevy_ecs::prelude::{NonSend, NonSendMut};
     // Фильтры запросов
     pub use bevy_ecs::prelude::{Added, Changed, Or, With, Without};
     // Иерархия
-    pub use bevy_ecs::prelude::{ChildOf, Children};
+    pub use bevy_ecs::prelude::{ChildOf, Children, Name};
     // Сообщения между системами (двойная буферизация, живут 2 кадра)
     pub use bevy_ecs::prelude::{Message, MessageReader, MessageWriter};
     // Порядок выполнения систем

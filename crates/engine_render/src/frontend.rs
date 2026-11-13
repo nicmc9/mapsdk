@@ -1,15 +1,18 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use engine_core::sync::mailbox::{MailboxSender, mailbox};
-use engine_core::sync::reply::reply;
+use engine_core::sync::reply::{ReplyReceiver, reply};
 use engine_core::sync::triple_buffer::{Producer, triple_buffer};
-use engine_core::{App, CVar, CVarFlags, CVarValue, FixedTime, LifecycleHook, Plugin, Stage, Time};
+use engine_core::{
+    App, AppControl, CVar, CVarFlags, CVarString, CVarValue, LifecycleHook, Plugin, Stage, Time,
+};
 use engine_ecs::prelude::*;
-use engine_platform::{Duration, Instant, PlatformWindow};
+use engine_platform::{Duration, Instant, PlatformWindow, WindowSize};
 
 use crate::Color;
-use crate::command::RenderCommand;
+use crate::command::{RenderCommand, Screenshot};
 use crate::renderer::{Renderer, SharedStats};
 use crate::snapshot::FrameSnapshot;
 
@@ -66,7 +69,44 @@ pub static RENDER_MODE: CVar<RenderMode> = CVar::new(
 )
 .with_flags(CVarFlags::STARTUP);
 
-/// Подключает рендер. Режим берётся из CVar `render.mode`.
+pub static RENDER_BACKEND: CVar<CVarString> = CVar::new(
+    "render.backend",
+    Cow::Borrowed("auto"),
+    "Графический API: auto, vulkan, metal, gl, webgpu",
+)
+.with_flags(CVarFlags::STARTUP);
+
+pub static RENDER_HEADLESS: CVar<bool> = CVar::new(
+    "render.headless",
+    false,
+    "Рисовать без окна в текстуру (тесты, серверный рендер)",
+)
+.with_flags(CVarFlags::STARTUP);
+
+pub static RENDER_HEADLESS_WIDTH: CVar<u32> =
+    CVar::new("render.headless_width", 1280, "Ширина кадра без окна")
+        .with_flags(CVarFlags::STARTUP);
+pub static RENDER_HEADLESS_HEIGHT: CVar<u32> =
+    CVar::new("render.headless_height", 720, "Высота кадра без окна")
+        .with_flags(CVarFlags::STARTUP);
+
+pub static SCREENSHOT_PATH: CVar<CVarString> = CVar::new(
+    "render.screenshot",
+    Cow::Borrowed(""),
+    "Сохранить кадр в PNG по этому пути (пусто — не сохранять)",
+);
+pub static SCREENSHOT_FRAME: CVar<u64> = CVar::new(
+    "render.screenshot_frame",
+    120,
+    "На каком кадре логики делать снимок",
+);
+pub static SCREENSHOT_EXIT: CVar<bool> = CVar::new(
+    "render.screenshot_exit",
+    false,
+    "Выйти после сохранения снимка",
+);
+
+/// Подключает рендер. Требует `ScenePlugin` (а он — `AssetPlugin`).
 #[derive(Debug, Default)]
 pub struct RenderPlugin;
 
@@ -83,15 +123,21 @@ pub struct RenderStats {
     pub snapshots_skipped: u64,
     /// Время работы последнего кадра рендера на CPU (без ожидания кадра экрана).
     pub frame_cpu_time: Duration,
+    /// Нарисовано и отсечено примитивов в последнем кадре.
+    pub drawn: u64,
+    pub culled: u64,
+    /// Ресурсов в видеопамяти.
+    pub gpu_meshes: u64,
+    pub gpu_textures: u64,
 }
 
 /// Сторона главного потока: отправляет команды и снимки рендеру.
 ///
 /// Хранится как non-send ресурс: работает с ним только главный поток. Это нужно на Web,
 /// где объекты `wgpu` нельзя передавать между потоками.
-struct RenderFrontend {
+pub(crate) struct RenderFrontend {
     commands: MailboxSender<RenderCommand>,
-    snapshots: Producer<FrameSnapshot>,
+    pub(crate) snapshots: Producer<FrameSnapshot>,
     stats: Arc<SharedStats>,
     /// Создаётся при первом появлении окна: на Android для GLES нужен display окна.
     instance: Option<wgpu::Instance>,
@@ -106,10 +152,59 @@ enum Backend {
     Inline(Box<Renderer>),
 }
 
+/// Ожидание скриншота: опрашивайте `try_get()` в следующих кадрах.
+pub type ScreenshotReceiver = ReplyReceiver<Result<Screenshot, String>>;
+
+/// Запрашивает снимок ближайшего кадра рендера.
+pub fn request_screenshot(world: &mut World) -> ScreenshotReceiver {
+    let (tx, rx) = reply();
+    world
+        .non_send_mut::<RenderFrontend>()
+        .send(RenderCommand::Screenshot { reply: tx });
+    rx
+}
+
+fn backends() -> wgpu::Backends {
+    match RENDER_BACKEND.get().as_ref() {
+        "vulkan" => wgpu::Backends::VULKAN,
+        "metal" => wgpu::Backends::METAL,
+        "gl" => wgpu::Backends::GL,
+        "webgpu" => wgpu::Backends::BROWSER_WEBGPU,
+        other => {
+            if other != "auto" {
+                tracing::warn!("render.backend = «{other}» неизвестен, используется auto");
+            }
+            let mut backends =
+                wgpu::Backends::VULKAN | wgpu::Backends::METAL | wgpu::Backends::BROWSER_WEBGPU;
+            if cfg!(target_os = "android") {
+                backends |= wgpu::Backends::GL; // GLES3 для старых устройств (решение D3)
+            }
+            backends
+        }
+    }
+}
+
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.register_cvar(&RENDER_MODE);
-        let mode = RENDER_MODE.get();
+        assert!(
+            app.is_plugin_added::<engine_scene::ScenePlugin>(),
+            "RenderPlugin требует ScenePlugin: добавьте его раньше"
+        );
+        app.register_cvar(&RENDER_MODE)
+            .register_cvar(&RENDER_BACKEND)
+            .register_cvar(&RENDER_HEADLESS)
+            .register_cvar(&RENDER_HEADLESS_WIDTH)
+            .register_cvar(&RENDER_HEADLESS_HEIGHT)
+            .register_cvar(&SCREENSHOT_PATH)
+            .register_cvar(&SCREENSHOT_FRAME)
+            .register_cvar(&SCREENSHOT_EXIT);
+        let headless = RENDER_HEADLESS.get();
+        // Без окна нет цикла событий платформы — кадры рисует главный поток
+        let mode = if headless {
+            RenderMode::Inline
+        } else {
+            RENDER_MODE.get()
+        };
         let (commands_tx, commands_rx) = mailbox("render");
         let (producer, consumer) = triple_buffer(&FrameSnapshot::default());
         let stats = Arc::new(SharedStats::default());
@@ -125,20 +220,40 @@ impl Plugin for RenderPlugin {
             }
             RenderMode::Inline => Backend::Inline(Box::new(renderer)),
         };
-        tracing::info!("Рендер: режим {mode:?}");
+        tracing::info!(
+            "Рендер: режим {mode:?}{}",
+            if headless { ", без окна" } else { "" }
+        );
 
-        app.world_mut().insert_non_send(RenderFrontend {
+        let frontend = RenderFrontend {
             commands: commands_tx,
             snapshots: producer,
             stats,
             instance: None,
             backend,
-        });
+        };
+        if headless {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: backends(),
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
+            });
+            frontend.send(RenderCommand::InitHeadless {
+                instance,
+                size: WindowSize {
+                    width: RENDER_HEADLESS_WIDTH.get(),
+                    height: RENDER_HEADLESS_HEIGHT.get(),
+                },
+            });
+        }
+        app.world_mut().insert_non_send(frontend);
         app.init_resource::<ClearColor>()
             .init_resource::<RenderStats>()
             .add_systems(Stage::First, update_stats)
-            .add_systems(Stage::Extract, extract_frame)
-            .add_systems(Stage::Last, render_inline)
+            .add_systems(
+                Stage::Extract,
+                (crate::extract::sync_assets, crate::extract::extract_frame).chain(),
+            )
+            .add_systems(Stage::Last, (render_inline, save_screenshot))
             .add_lifecycle_hook(|world, event| {
                 world.non_send_mut::<RenderFrontend>().on_lifecycle(event);
             });
@@ -175,13 +290,15 @@ fn spawn_render_thread(mut renderer: Renderer) -> std::thread::JoinHandle<()> {
 }
 
 impl RenderFrontend {
+    pub(crate) fn send(&self, command: RenderCommand) {
+        self.commands.send(command);
+    }
+
     fn on_lifecycle(&mut self, event: &LifecycleHook<'_>) {
         match event {
             LifecycleHook::Resumed(window) => self.create_surface(window),
             LifecycleHook::Suspended => self.release_surface(),
-            LifecycleHook::Resized { size, .. } => {
-                self.commands.send(RenderCommand::Resize(*size));
-            }
+            LifecycleHook::Resized { size, .. } => self.send(RenderCommand::Resize(*size)),
             LifecycleHook::Exiting => self.shutdown(),
         }
     }
@@ -190,24 +307,20 @@ impl RenderFrontend {
     /// можно только из него.
     fn create_surface(&mut self, window: &PlatformWindow) {
         let instance = self.instance.get_or_insert_with(|| {
-            let mut backends =
-                wgpu::Backends::VULKAN | wgpu::Backends::METAL | wgpu::Backends::BROWSER_WEBGPU;
-            if cfg!(target_os = "android") {
-                backends |= wgpu::Backends::GL; // GLES3 для старых устройств (решение D3)
-            }
             wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends,
+                backends: backends(),
                 ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()))
             })
         });
         // PlatformWindow владеет окном через Arc, поэтому surface может жить сколько угодно
         match instance.create_surface(window.clone()) {
             Ok(surface) => {
-                self.commands.send(RenderCommand::SurfaceCreated {
+                let command = RenderCommand::SurfaceCreated {
                     instance: instance.clone(),
                     surface,
                     size: window.size(),
-                });
+                };
+                self.send(command);
             }
             Err(error) => tracing::error!("Не удалось создать surface: {error}"),
         }
@@ -218,8 +331,7 @@ impl RenderFrontend {
     /// можно вернуть управление ОС — она уничтожит окно.
     fn release_surface(&mut self) {
         let (reply_tx, reply_rx) = reply();
-        self.commands
-            .send(RenderCommand::SurfaceLost { reply: reply_tx });
+        self.send(RenderCommand::SurfaceLost { reply: reply_tx });
         // В режиме Inline рендер — это мы сами: выполняем команду прямо здесь
         self.pump_inline();
         let started = Instant::now();
@@ -231,7 +343,7 @@ impl RenderFrontend {
     }
 
     fn shutdown(&mut self) {
-        self.commands.send(RenderCommand::Shutdown);
+        self.send(RenderCommand::Shutdown);
         match &mut self.backend {
             #[cfg(not(target_arch = "wasm32"))]
             Backend::Threaded(handle) => {
@@ -258,38 +370,6 @@ impl RenderFrontend {
     }
 }
 
-/// Заполняет снимок кадра и публикует его рендеру.
-fn extract_frame(
-    clear_color: Res<ClearColor>,
-    time: Res<Time>,
-    fixed: Res<FixedTime>,
-    mut frontend: NonSendMut<RenderFrontend>,
-    // [Rust] `Local` — состояние, принадлежащее этой системе (как static-переменная
-    // внутри функции, но своя у каждого экземпляра системы и без глобального состояния).
-    mut last: Local<Option<(u64, Color)>>,
-) {
-    // Цвет на предыдущем шаге логики: запоминаем, что было при прошлой публикации,
-    // и сдвигаем, только если с тех пор был новый шаг.
-    let steps = fixed.steps_total();
-    let (prev_steps, prev_color) = last.unwrap_or((steps, clear_color.0));
-    let prev_clear_color = if steps == prev_steps {
-        // Шагов не было — интервал интерполяции тот же
-        frontend.snapshots.write().prev_clear_color
-    } else {
-        prev_color
-    };
-    *last = Some((steps, clear_color.0));
-
-    let snapshot = frontend.snapshots.write();
-    snapshot.frame = time.frame();
-    snapshot.prev_clear_color = prev_clear_color;
-    snapshot.clear_color = clear_color.0;
-    snapshot.step = fixed.step();
-    snapshot.overstep = fixed.overstep_fraction();
-    snapshot.published_at = Some(Instant::now());
-    frontend.snapshots.publish();
-}
-
 #[cfg_attr(target_arch = "wasm32", allow(irrefutable_let_patterns))]
 fn render_inline(mut frontend: NonSendMut<RenderFrontend>) {
     if let Backend::Inline(renderer) = &mut frontend.backend {
@@ -300,8 +380,35 @@ fn render_inline(mut frontend: NonSendMut<RenderFrontend>) {
 }
 
 fn update_stats(frontend: NonSend<RenderFrontend>, mut stats: ResMut<RenderStats>) {
-    stats.frames_rendered = frontend.stats.frames_rendered.load(Ordering::Relaxed);
-    stats.snapshots_skipped = frontend.stats.snapshots_skipped.load(Ordering::Relaxed);
-    stats.frame_cpu_time =
-        Duration::from_nanos(frontend.stats.frame_cpu_nanos.load(Ordering::Relaxed));
+    let s = &frontend.stats;
+    stats.frames_rendered = s.frames_rendered.load(Ordering::Relaxed);
+    stats.snapshots_skipped = s.snapshots_skipped.load(Ordering::Relaxed);
+    stats.frame_cpu_time = Duration::from_nanos(s.frame_cpu_nanos.load(Ordering::Relaxed));
+    stats.drawn = s.drawn.load(Ordering::Relaxed);
+    stats.culled = s.culled.load(Ordering::Relaxed);
+    stats.gpu_meshes = s.gpu_meshes.load(Ordering::Relaxed);
+    stats.gpu_textures = s.gpu_textures.load(Ordering::Relaxed);
+}
+
+/// CVar `render.screenshot`: на кадре `render.screenshot_frame` снимает кадр и сохраняет PNG.
+fn save_screenshot(world: &mut World, mut pending: Local<Option<ScreenshotReceiver>>) {
+    let path = SCREENSHOT_PATH.get();
+    if path.is_empty() {
+        return;
+    }
+    if pending.is_none() && world.resource::<Time>().frame() == SCREENSHOT_FRAME.get() {
+        *pending = Some(request_screenshot(world));
+        return;
+    }
+    let Some(result) = pending.as_ref().and_then(ReplyReceiver::try_get) else {
+        return;
+    };
+    *pending = None;
+    match result.and_then(|shot| crate::save_png(&shot, &path)) {
+        Ok(()) => tracing::info!("Скриншот сохранён: {path}"),
+        Err(error) => tracing::error!("Скриншот не сохранён: {error}"),
+    }
+    if SCREENSHOT_EXIT.get() {
+        world.resource_mut::<AppControl>().request_exit();
+    }
 }

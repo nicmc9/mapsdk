@@ -33,6 +33,27 @@ cargo run -p sandbox -- --cvar sim.hz=30 --cvar render.mode=inline --cvar log.fi
 
 На Web — параметрами URL: `http://localhost:8000/?sim.hz=30&render.mode=inline`.
 
+Сцена: `--cvar sandbox.scene=sponza` (`showcase`, `sponza`, `helmet`).
+Управление: левая кнопка мыши или палец — вращение, колесо, щипок или Q/E — приближение.
+
+### Скриншот
+
+```sh
+cargo run -p sandbox -- --cvar render.screenshot=shot.png --cvar render.screenshot_frame=240 --cvar render.screenshot_exit=true
+```
+
+### Настройки на устройстве (Android, iOS)
+
+Аргументов запуска на мобильных нет — значения берутся из `engine.toml` в каталоге
+приложения (важнее встроенного `sandbox.toml`). Android, отладочная сборка:
+
+```sh
+adb shell run-as com.mapsdk.sandbox sh -c 'echo render.backend = \"gl\" > files/engine.toml'
+```
+
+**Эмулятор Android:** на Vulkan эмулятора (SwiftShader через gfxstream) создание PBR-пайплайна
+зависает. Используйте `render.backend = "gl"`. На реальных устройствах Vulkan не проверен.
+
 ### Профилирование
 
 ```sh
@@ -62,6 +83,7 @@ cargo clippy --workspace --all-targets --target aarch64-apple-ios -- -D warnings
 cargo clippy --workspace --lib --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
 cargo test -p engine_net -- --ignored   # реальная сеть
+cargo test -p engine_render --test golden   # сравнение картинок (без GPU — пропуск)
 ```
 
 Под Linux локально на Mac не проверить: `ring` (TLS) содержит C-код, нужен компилятор

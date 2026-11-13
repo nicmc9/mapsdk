@@ -17,6 +17,8 @@ engine_platform = { workspace = true }
 engine_render = { workspace = true }
 engine_net = { workspace = true }
 engine_assets = { workspace = true }
+engine_scene = { workspace = true }
+engine_input = { workspace = true }
 tracing = { workspace = true }
 
 [features]

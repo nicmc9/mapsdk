@@ -6,7 +6,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
 use crate::{
-    NextUpdate, PlatformConfig, PlatformError, PlatformHandler, PlatformWindow, WindowSize,
+    InputEvent, MouseButton, NextUpdate, PlatformConfig, PlatformError, PlatformHandler,
+    PlatformWindow, TouchPhase, WindowSize,
 };
 
 /// Мост между `winit` и [`PlatformHandler`]: переводит события ОС в вызовы обработчика.
@@ -137,6 +138,61 @@ impl<H: PlatformHandler> ApplicationHandler for PlatformApp<H> {
             }
             WindowEvent::RedrawRequested if self.display_driven && !self.suspended => {
                 self.run_update(event_loop);
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key
+                    && !event.repeat
+                {
+                    self.handler.input(InputEvent::Key {
+                        key: crate::input::map_key(code),
+                        pressed: event.state.is_pressed(),
+                    });
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let button = match button {
+                    winit::event::MouseButton::Left => MouseButton::Left,
+                    winit::event::MouseButton::Right => MouseButton::Right,
+                    winit::event::MouseButton::Middle => MouseButton::Middle,
+                    winit::event::MouseButton::Back => MouseButton::Other(3),
+                    winit::event::MouseButton::Forward => MouseButton::Other(4),
+                    winit::event::MouseButton::Other(n) => MouseButton::Other(n),
+                };
+                self.handler.input(InputEvent::MouseButton {
+                    button,
+                    pressed: state.is_pressed(),
+                });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handler.input(InputEvent::CursorMoved {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::MouseWheel { delta, .. } => {
+                let delta = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    // Тачпад: пиксели — приводим примерно к «строкам»
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+                self.handler.input(InputEvent::MouseWheel { delta });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::Touch(touch) => {
+                let phase = match touch.phase {
+                    winit::event::TouchPhase::Started => TouchPhase::Started,
+                    winit::event::TouchPhase::Moved => TouchPhase::Moved,
+                    winit::event::TouchPhase::Ended => TouchPhase::Ended,
+                    winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
+                };
+                self.handler.input(InputEvent::Touch {
+                    id: touch.id,
+                    phase,
+                    x: touch.location.x as f32,
+                    y: touch.location.y as f32,
+                });
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(window) = &self.window {

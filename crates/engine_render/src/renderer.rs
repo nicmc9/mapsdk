@@ -2,11 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine_core::sync::mailbox::Mailbox;
+use engine_core::sync::reply::ReplySender;
 use engine_core::sync::triple_buffer::Consumer;
 use engine_platform::{Instant, WindowSize};
 
-use crate::command::RenderCommand;
+use crate::command::{RenderCommand, Screenshot};
 use crate::gpu::{Gpu, GpuInit};
+use crate::scene::{DEPTH_FORMAT, SceneRenderer};
 use crate::snapshot::FrameSnapshot;
 
 /// Счётчики, которые рендер пишет, а главный поток читает для статистики.
@@ -15,6 +17,10 @@ pub(crate) struct SharedStats {
     pub frames_rendered: AtomicU64,
     pub snapshots_skipped: AtomicU64,
     pub frame_cpu_nanos: AtomicU64,
+    pub drawn: AtomicU64,
+    pub culled: AtomicU64,
+    pub gpu_meshes: AtomicU64,
+    pub gpu_textures: AtomicU64,
 }
 
 /// Продолжать работу или завершиться.
@@ -24,15 +30,27 @@ pub(crate) enum Flow {
     Exit,
 }
 
-/// Окно, в которое рисуем.
-struct Target {
-    surface: wgpu::Surface<'static>,
-    size: WindowSize,
-    /// `None` — ещё не настроен (нет GPU или окно нулевого размера).
-    config: Option<wgpu::SurfaceConfiguration>,
+/// Куда рисуем: окно или текстура в памяти (offscreen).
+enum TargetKind {
+    Surface {
+        surface: wgpu::Surface<'static>,
+        /// `None` — ещё не настроен (нет GPU или окно нулевого размера).
+        config: Option<wgpu::SurfaceConfiguration>,
+    },
+    Offscreen {
+        texture: Option<wgpu::Texture>,
+    },
 }
 
-/// Рендер: владеет GPU и окном отрисовки. Работает в своём потоке или в главном —
+struct Target {
+    kind: TargetKind,
+    size: WindowSize,
+    /// Формат, в котором рисуют пайплайны (для окна — sRGB-вариант, если есть).
+    view_format: Option<wgpu::TextureFormat>,
+    depth: Option<wgpu::TextureView>,
+}
+
+/// Рендер: владеет GPU и целью отрисовки. Работает в своём потоке или в главном —
 /// код одинаковый, отличается только то, кто вызывает методы.
 pub(crate) struct Renderer {
     commands: Mailbox<RenderCommand>,
@@ -41,6 +59,10 @@ pub(crate) struct Renderer {
     gpu: Option<Gpu>,
     init: Option<GpuInit>,
     target: Option<Target>,
+    scene: Option<SceneRenderer>,
+    /// Ресурсы, пришедшие до готовности GPU, — применятся после инициализации.
+    pending: Vec<RenderCommand>,
+    screenshots: Vec<ReplySender<Result<Screenshot, String>>>,
 }
 
 impl Renderer {
@@ -56,12 +78,20 @@ impl Renderer {
             gpu: None,
             init: None,
             target: None,
+            scene: None,
+            pending: Vec::new(),
+            screenshots: Vec::new(),
         }
     }
 
     /// Можно ли рисовать прямо сейчас.
     pub fn can_render(&self) -> bool {
-        self.gpu.is_some() && self.target.as_ref().is_some_and(|t| t.config.is_some())
+        self.gpu.is_some()
+            && self.scene.is_some()
+            && self
+                .target
+                .as_ref()
+                .is_some_and(|t| t.view_format.is_some())
     }
 
     /// Нечего делать, пока не придёт команда: нет окна или GPU и инициализация не идёт.
@@ -70,7 +100,6 @@ impl Renderer {
         !self.can_render() && self.init.is_none()
     }
 
-    /// Блокирующе ждёт одну команду и выполняет её. Для потока рендера в простое.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_command(&mut self) -> Flow {
         match self.commands.recv() {
@@ -91,7 +120,7 @@ impl Renderer {
     }
 
     fn handle(&mut self, command: RenderCommand) -> Flow {
-        tracing::debug!("Рендер: команда {command:?}");
+        tracing::trace!("Рендер: команда {command:?}");
         match command {
             RenderCommand::SurfaceCreated {
                 instance,
@@ -99,14 +128,27 @@ impl Renderer {
                 size,
             } => {
                 if self.gpu.is_none() && self.init.is_none() {
-                    self.init = Some(GpuInit::start(&instance, &surface));
+                    self.init = Some(GpuInit::start(&instance, Some(&surface)));
                 }
                 self.target = Some(Target {
-                    surface,
+                    kind: TargetKind::Surface {
+                        surface,
+                        config: None,
+                    },
                     size,
-                    config: None,
+                    view_format: None,
+                    depth: None,
                 });
                 self.configure();
+            }
+            RenderCommand::InitHeadless { instance, size } => {
+                self.init = Some(GpuInit::start(&instance, None));
+                self.target = Some(Target {
+                    kind: TargetKind::Offscreen { texture: None },
+                    size,
+                    view_format: None,
+                    depth: None,
+                });
             }
             RenderCommand::SurfaceLost { reply } => {
                 // Surface уничтожается здесь — до ответа главному потоку
@@ -118,16 +160,43 @@ impl Renderer {
                 if let Some(target) = &mut self.target {
                     // При переносе окна между экранами winit присылает и смену размера,
                     // и смену масштаба — второй раз перенастраивать незачем
-                    if target.size == size && target.config.is_some() {
+                    if target.size == size && target.view_format.is_some() {
                         return Flow::Continue;
                     }
                     target.size = size;
                 }
                 self.configure();
             }
+            RenderCommand::Screenshot { reply } => self.screenshots.push(reply),
             RenderCommand::Shutdown => return Flow::Exit,
+            resource => self.apply_resource(resource),
         }
         Flow::Continue
+    }
+
+    fn apply_resource(&mut self, command: RenderCommand) {
+        let (Some(gpu), Some(scene)) = (&self.gpu, &mut self.scene) else {
+            self.pending.push(command);
+            return;
+        };
+        match command {
+            RenderCommand::UploadMesh(id, mesh) => scene.upload_mesh(&gpu.device, id, &mesh),
+            RenderCommand::UploadImage(id, image) => {
+                scene.upload_image(&gpu.device, &gpu.queue, id, &image);
+            }
+            RenderCommand::UploadMaterial(id, data) => scene.upload_material(&gpu.device, id, data),
+            RenderCommand::RemoveMesh(id) => scene.remove_mesh(id),
+            RenderCommand::RemoveImage(id) => scene.remove_image(id),
+            RenderCommand::RemoveMaterial(id) => scene.remove_material(id),
+            _ => {}
+        }
+        let (meshes, textures, _) = scene.counts();
+        self.stats
+            .gpu_meshes
+            .store(meshes as u64, Ordering::Relaxed);
+        self.stats
+            .gpu_textures
+            .store(textures as u64, Ordering::Relaxed);
     }
 
     /// Проверяет асинхронную инициализацию GPU.
@@ -154,33 +223,100 @@ impl Renderer {
         }
     }
 
-    /// (Пере)настраивает surface под текущий размер окна.
+    /// (Пере)настраивает цель отрисовки под текущий размер.
     fn configure(&mut self) {
         let (Some(gpu), Some(target)) = (&self.gpu, &mut self.target) else {
             return;
         };
         let WindowSize { width, height } = target.size;
         if width == 0 || height == 0 {
-            // Свёрнутое окно: настраивать surface нулевого размера нельзя
-            target.config = None;
+            // Свёрнутое окно: настраивать цель нулевого размера нельзя
+            target.view_format = None;
             return;
         }
-        let Some(mut config) = target
-            .surface
-            .get_default_config(&gpu.adapter, width, height)
-        else {
-            tracing::error!("Surface несовместим с адаптером");
-            return;
+        let view_format = match &mut target.kind {
+            TargetKind::Surface { surface, config } => {
+                let Some(mut new_config) = surface.get_default_config(&gpu.adapter, width, height)
+                else {
+                    tracing::error!("Surface несовместим с адаптером");
+                    return;
+                };
+                // Fifo = вертикальная синхронизация: get_current_texture ждёт свободный кадр
+                // экрана, и это задаёт темп потока рендера. Поддерживается везде.
+                new_config.present_mode = wgpu::PresentMode::Fifo;
+                new_config.desired_maximum_frame_latency = 2;
+                let capabilities = surface.get_capabilities(&gpu.adapter);
+                if capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+                    new_config.usage |= wgpu::TextureUsages::COPY_SRC; // для скриншотов
+                }
+                // На Web формат окна не sRGB. Рисуем через sRGB-«вид» той же текстуры, если
+                // GPU умеет; иначе шейдер кодирует sRGB сам (флаг в uniform)
+                let srgb = new_config.format.add_srgb_suffix();
+                let downlevel = gpu.adapter.get_downlevel_capabilities();
+                let format = if srgb != new_config.format
+                    && downlevel
+                        .flags
+                        .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS)
+                {
+                    new_config.view_formats.push(srgb);
+                    srgb
+                } else {
+                    new_config.format
+                };
+                surface.configure(&gpu.device, &new_config);
+                tracing::info!(
+                    "Surface: {width}x{height}, {:?} (рисуем в {format:?})",
+                    new_config.format
+                );
+                *config = Some(new_config);
+                format
+            }
+            TargetKind::Offscreen { texture } => {
+                let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+                *texture = Some(gpu.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("offscreen"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                }));
+                tracing::info!("Offscreen: {width}x{height}, {format:?}");
+                format
+            }
         };
-        // Fifo = вертикальная синхронизация: get_current_texture ждёт свободный кадр
-        // экрана, и это задаёт темп потока рендера. Поддерживается везде.
-        config.present_mode = wgpu::PresentMode::Fifo;
-        config.desired_maximum_frame_latency = 2;
-        target.surface.configure(&gpu.device, &config);
+        let depth = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        target.depth = Some(depth.create_view(&wgpu::TextureViewDescriptor::default()));
+        target.view_format = Some(view_format);
+
+        if self.scene.is_none() {
+            self.scene = Some(SceneRenderer::new(&gpu.device, &gpu.queue, view_format));
+            // Ресурсы, пришедшие до готовности GPU
+            for command in std::mem::take(&mut self.pending) {
+                self.apply_resource(command);
+            }
+        }
         // Рендер (снова) готов рисовать: пропуски за время простоя не считаем
         self.snapshots.resync();
-        tracing::info!("Surface: {width}x{height}, {:?}", config.format);
-        target.config = Some(config);
     }
 
     /// Рисует кадр. `false` — кадр не нарисован (не готово, окно скрыто и т.п.).
@@ -194,78 +330,126 @@ impl Renderer {
             .snapshots_skipped
             .store(self.snapshots.skipped(), Ordering::Relaxed);
 
-        // [Rust] Выше проверено, что gpu и target есть, но компилятор об этом не знает.
+        // [Rust] Выше проверено, что всё есть, но компилятор об этом не знает:
         // `let ... else` достаёт значения или выходит из функции.
-        let (Some(gpu), Some(target)) = (&self.gpu, &self.target) else {
+        let (Some(gpu), Some(target), Some(scene)) = (&self.gpu, &self.target, &mut self.scene)
+        else {
             return false;
         };
+        let (Some(view_format), Some(depth)) = (target.view_format, &target.depth) else {
+            return false;
+        };
+
+        // Цель: кадр окна или offscreen-текстура
         let acquire_started = Instant::now();
-        let acquired = {
-            // Здесь поток ждёт свободный кадр экрана (vsync) — в профайлере это видно отдельно
-            let _zone = tracing::trace_span!("acquire_frame").entered();
-            target.surface.get_current_texture()
+        let surface_frame = match &target.kind {
+            TargetKind::Surface { surface, .. } => match acquire(surface) {
+                Acquired::Frame(frame) => Some(frame),
+                Acquired::Skip => return false,
+                Acquired::Reconfigure => {
+                    self.configure();
+                    return false;
+                }
+            },
+            TargetKind::Offscreen { .. } => None,
         };
         let waited = acquire_started.elapsed();
-        let work_started = Instant::now();
         if waited.as_millis() > 100 {
             tracing::debug!("Рендер: ожидание кадра экрана {waited:?}");
         }
-        let frame = match acquired {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                tracing::debug!("Рендер: кадр экрана недоступен (окно скрыто или таймаут)");
-                return false;
-            }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                tracing::warn!("Surface устарел, перенастраиваем");
-                self.configure();
-                return false;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                tracing::error!("Ошибка валидации при получении кадра");
-                return false;
-            }
+        let work_started = Instant::now();
+        let texture = match (&surface_frame, &target.kind) {
+            (Some(frame), _) => &frame.texture,
+            (
+                None,
+                TargetKind::Offscreen {
+                    texture: Some(texture),
+                },
+            ) => texture,
+            _ => return false,
         };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(view_format),
+            ..Default::default()
+        });
 
-        let clear = self
-            .snapshots
-            .current()
-            .interpolated_clear_color(Instant::now());
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let snapshot = self.snapshots.current();
+        let alpha = snapshot.alpha(Instant::now());
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
-        {
-            // [Rust] Блок ограничивает жизнь render pass: он заимствует encoder,
-            // и `encoder.finish()` ниже возможен только после выхода из блока.
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear.to_wgpu()),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-        }
+        let frame_target = crate::scene::FrameTarget {
+            color: &view,
+            depth,
+            size: (target.size.width, target.size.height),
+        };
+        let draw = scene.render(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            &frame_target,
+            snapshot,
+            alpha,
+        );
+
+        // Скриншот: копия кадра в буфер, читаемый процессором
+        let readback = (!self.screenshots.is_empty())
+            .then(|| crate::screenshot::copy_to_buffer(&gpu.device, &mut encoder, texture));
         {
             let _zone = tracing::trace_span!("submit_present").entered();
             gpu.queue.submit([encoder.finish()]);
-            gpu.queue.present(frame);
+            if let Some(readback) = readback {
+                let result = readback.read(&gpu.device);
+                for reply in self.screenshots.drain(..) {
+                    reply.send(result.clone());
+                }
+            }
+            if let Some(frame) = surface_frame {
+                gpu.queue.present(frame);
+            }
         }
         let work = u64::try_from(work_started.elapsed().as_nanos()).unwrap_or(u64::MAX);
         self.stats.frame_cpu_nanos.store(work, Ordering::Relaxed);
+        self.stats
+            .drawn
+            .store(u64::from(draw.drawn), Ordering::Relaxed);
+        self.stats
+            .culled
+            .store(u64::from(draw.culled), Ordering::Relaxed);
         self.stats.frames_rendered.fetch_add(1, Ordering::Relaxed);
         engine_platform::profiling::render_frame_mark();
         true
+    }
+}
+
+enum Acquired {
+    Frame(wgpu::SurfaceTexture),
+    Skip,
+    Reconfigure,
+}
+
+/// Следующий кадр окна. Здесь поток ждёт свободный кадр экрана (vsync).
+fn acquire(surface: &wgpu::Surface<'static>) -> Acquired {
+    let acquired = {
+        let _zone = tracing::trace_span!("acquire_frame").entered();
+        surface.get_current_texture()
+    };
+    match acquired {
+        wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Acquired::Frame(frame),
+        wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+            tracing::debug!("Рендер: кадр экрана недоступен (окно скрыто или таймаут)");
+            Acquired::Skip
+        }
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+            tracing::warn!("Surface устарел, перенастраиваем");
+            Acquired::Reconfigure
+        }
+        wgpu::CurrentSurfaceTexture::Validation => {
+            tracing::error!("Ошибка валидации при получении кадра");
+            Acquired::Skip
+        }
     }
 }

@@ -1,24 +1,53 @@
+use engine_assets::AssetId;
+use engine_assets::formats::{Material, Mesh};
+use engine_math::{Mat4, Quat, Vec3};
 use engine_platform::{Duration, Instant};
 
 use crate::Color;
 
 /// Состояние кадра, которое логика передаёт рендеру через тройной буфер.
 ///
-/// Здесь только то, что меняется каждый кадр. Постоянные объекты (меши, текстуры)
-/// будут создаваться командами, а в снимке — только их id.
+/// Только то, что меняется каждый кадр. Меши, текстуры и материалы приходят командами,
+/// здесь — только их id. Коллекции очищаются через `clear()` — память переиспользуется.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FrameSnapshot {
-    /// Номер кадра логики (для отладки и статистики).
     pub frame: u64,
-    /// Цвет фона на предыдущем и текущем шаге логики — для интерполяции.
     pub prev_clear_color: Color,
     pub clear_color: Color,
-    /// Длительность шага логики.
     pub step: Duration,
-    /// Когда снимок опубликован и насколько реальное время на тот момент ушло вперёд
-    /// от последнего шага (доля шага). `None` — снимок ещё ни разу не публиковался.
     pub published_at: Option<Instant>,
     pub overstep: f32,
+    pub camera: Option<CameraSnapshot>,
+    pub lights: LightsSnapshot,
+    pub draws: Vec<DrawItem>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CameraSnapshot {
+    pub prev: Mat4,
+    pub curr: Mat4,
+    pub fov_y: f32,
+    pub near: f32,
+    pub far: f32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LightsSnapshot {
+    pub ambient: [f32; 3],
+    /// Направление (куда светит) и цвет × интенсивность.
+    pub sun: Option<(Vec3, [f32; 3])>,
+    /// Позиция, радиус, цвет × интенсивность.
+    pub points: Vec<(Vec3, f32, [f32; 3])>,
+}
+
+/// Один примитив меша в мире: трансформ на предыдущем и текущем шаге логики.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DrawItem {
+    pub mesh: AssetId<Mesh>,
+    pub primitive: u32,
+    pub material: Option<AssetId<Material>>,
+    pub prev: Mat4,
+    pub curr: Mat4,
 }
 
 impl FrameSnapshot {
@@ -38,8 +67,22 @@ impl FrameSnapshot {
         alpha.clamp(0.0, 1.0)
     }
 
-    pub fn interpolated_clear_color(&self, now: Instant) -> Color {
-        self.prev_clear_color
-            .lerp(self.clear_color, self.alpha(now))
+    pub fn interpolated_clear_color(&self, alpha: f32) -> Color {
+        self.prev_clear_color.lerp(self.clear_color, alpha)
     }
+}
+
+/// Интерполяция трансформа: позиция и масштаб линейно, поворот — сферически (slerp).
+/// Линейная интерполяция матриц целиком искажает поворот (объект «сжимается» по пути).
+pub(crate) fn interpolate(prev: &Mat4, curr: &Mat4, alpha: f32) -> Mat4 {
+    if alpha >= 1.0 || prev == curr {
+        return *curr;
+    }
+    let (s0, r0, t0): (Vec3, Quat, Vec3) = prev.to_scale_rotation_translation();
+    let (s1, r1, t1) = curr.to_scale_rotation_translation();
+    Mat4::from_scale_rotation_translation(
+        s0.lerp(s1, alpha),
+        r0.slerp(r1, alpha),
+        t0.lerp(t1, alpha),
+    )
 }

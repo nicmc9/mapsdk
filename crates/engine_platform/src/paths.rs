@@ -76,3 +76,26 @@ fn platform_read_bundled(path: &str) -> std::io::Result<Vec<u8>> {
 fn platform_read_bundled(_path: &str) -> std::io::Result<Vec<u8>> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
+
+/// Каталог пользовательского файла конфигурации `engine.toml` (переопределяет встроенный).
+/// Desktop и Web: `None` — там есть аргументы запуска и параметры URL.
+pub fn config_dir() -> Option<PathBuf> {
+    platform_config_dir()
+}
+
+#[cfg(target_os = "android")]
+fn platform_config_dir() -> Option<PathBuf> {
+    // Внутренний каталог приложения. Отладочной сборке файл можно положить так:
+    // adb shell run-as <пакет> sh -c 'echo "render.backend = \"gl\"" > files/engine.toml'
+    crate::android::app()?.internal_data_path()
+}
+
+#[cfg(target_os = "ios")]
+fn platform_config_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("HOME")?).join("Documents"))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn platform_config_dir() -> Option<PathBuf> {
+    None
+}
